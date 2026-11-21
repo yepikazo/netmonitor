@@ -82,6 +82,12 @@ def discover_workers(wait=1.0):
     workers = {}
     networks = local_subnets()
     if networks:
+        print("[*] Jaringan yang dipindai:")
+        for network, own_ip, interface in networks:
+            print(f"    - {interface}: {own_ip} pada {network} (Wi-Fi/hotspot maupun LAN)")
+    else:
+        print("[!] Tidak ada subnet IPv4 aktif yang terdeteksi oleh sistem.")
+    if networks:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.settimeout(0.2)
@@ -231,11 +237,28 @@ def choose_workers(workers):
     for index, worker in enumerate(workers):
         label = "Master lokal" if worker.get("local") else "Worker LAN"
         print(f"  [{index}] {worker['host']} ({worker['ip']}) — {worker['cores']} core, {label}")
-    print("Pilih node dengan indeks, rentang (contoh 0-3), atau all/ENTER.")
+    print("Pilih indeks/rentang (contoh 0-3), all/ENTER, atau tambahkan worker: add <IP>.")
     while True:
         value = input("Node yang digunakan [all]: ").strip().lower()
         if not value or value in {"all", "*"}:
             return workers
+        if value.startswith("add "):
+            try:
+                address = str(ipaddress.IPv4Address(value.split()[1]))
+                existing = next((node for node in workers if node["ip"] == address), None)
+                if existing:
+                    print(f"Worker {address} sudah ada pada daftar.")
+                    continue
+                print(f"[*] Menghubungi worker {address} pada TCP {TCP_PORT}...")
+                node = worker_info(address)
+                if node:
+                    workers.append(node)
+                    print(f"[+] Ditambahkan: [{len(workers)-1}] {node['host']} ({address}), {node['cores']} core")
+                else:
+                    print("[-] Tidak ada respons worker. Pastikan worker.py berjalan dan TCP 9998 dapat dijangkau.")
+            except (ValueError, IndexError):
+                print("Format: add 192.168.43.123")
+            continue
         indices = []
         try:
             for part in value.replace(" ", ",").split(","):
@@ -411,7 +434,7 @@ def main():
     workers.extend(remote_workers)
     print(f"[+] Node pemroses tersedia: {len(workers)} (master lokal + worker jaringan)")
 
-    if mode in {"1", "4", "5", "6", "7"} and remote_workers:
+    if mode in {"1", "4", "5", "6", "7"}:
         workers = choose_workers(workers)
     if mode == "7":
         remote_count = sum(not worker.get("local") for worker in workers)
