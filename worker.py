@@ -9,6 +9,7 @@ import platform
 import socket
 import subprocess
 import threading
+import time
 
 DISCOVERY_PORT = 9999
 TCP_PORT = 9998
@@ -64,8 +65,21 @@ def monitor_targets(targets, count, timeout):
         raise ValueError("semua target harus berupa alamat IPv4 valid") from exc
     cores = os.cpu_count() or 1
     # Each process works on independent IPs; avoid spawning more processes than targets.
-    with concurrent.futures.ProcessPoolExecutor(max_workers=min(cores, max(1, len(targets)))) as pool:
-        return list(pool.map(monitor_one, [(ip, count, timeout) for ip in targets]))
+    if not targets:
+        return []
+    print(f"[jalan] Mulai {len(targets)} target; {count} probe/IP, {min(cores, len(targets))} proses.", flush=True)
+    results = [None] * len(targets)
+    with concurrent.futures.ProcessPoolExecutor(max_workers=min(cores, len(targets))) as pool:
+        futures = {pool.submit(monitor_one, (ip, count, timeout)): index
+                   for index, ip in enumerate(targets)}
+        completed = 0
+        for future in concurrent.futures.as_completed(futures):
+            index = futures[future]
+            result = future.result()
+            results[index] = result
+            completed += 1
+            print(f"[progres] {completed}/{len(targets)} selesai — {result['ip']} {result['status']}", flush=True)
+    return results
 
 
 def send_line(conn, value):
@@ -90,11 +104,11 @@ def handle_client(conn, addr):
             count = request.get("count", 4)
             timeout = request.get("timeout", 1.0)
             conn.settimeout(None)
-            print(f"[+] {addr[0]} meminta monitoring {len(targets) if isinstance(targets, list) else '?'} target")
+            print(f"[+] {addr[0]} meminta monitoring {len(targets) if isinstance(targets, list) else '?'} target", flush=True)
             results = monitor_targets(targets, count, timeout)
             send_line(conn, {"host": socket.gethostname(), "results": results})
-            print(f"[✓] Selesai memantau {len(results)} target untuk {addr[0]}")
-        except (ValueError, TypeError, json.JSONDecodeError, OSError) as exc:
+            print(f"[✓] Selesai memantau {len(results)} target untuk {addr[0]}", flush=True)
+        except Exception as exc:
             try:
                 send_line(conn, {"error": str(exc)})
             except OSError:

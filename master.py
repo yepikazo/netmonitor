@@ -1,10 +1,11 @@
 """Master for distributed network monitoring (Tema 13)."""
 
-import argparse
 import ipaddress
 import json
 import os
+import re
 import socket
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -14,27 +15,47 @@ MAX_TARGETS = 4096
 
 
 def local_subnets():
-    """Find IPv4 /24 networks on local interfaces using the standard library."""
-    addresses = set()
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
-            probe.connect(("192.0.2.1", 80))  # TEST-NET address; no packet is sent.
-            addresses.add(probe.getsockname()[0])
-    except OSError:
-        pass
-    try:
-        addresses.update(socket.gethostbyname_ex(socket.gethostname())[2])
-    except OSError:
-        pass
+    """Return IPv4 networks from every up interface, with portable fallbacks."""
     networks = {}
-    for address in addresses:
+    # Linux/Android (including Termux): enumerate every interface instead of
+    # asking the routing table which single interface would reach one address.
+    try:
+        output = subprocess.run(["ip", "-o", "-4", "addr", "show", "up"],
+                               capture_output=True, text=True, timeout=3, check=False).stdout
+        for line in output.splitlines():
+            match = re.search(r"\binet\s+(\d+\.\d+\.\d+\.\d+/\d+)", line)
+            if not match:
+                continue
+            interface = line.split(":", 2)[1].strip() if ":" in line else ""
+            try:
+                iface = ipaddress.IPv4Interface(match.group(1))
+                if not iface.ip.is_loopback and not iface.ip.is_link_local:
+                    networks[str(iface.network)] = (str(iface.network), str(iface.ip), interface)
+            except ipaddress.AddressValueError:
+                continue
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    if not networks:
+        addresses = set()
         try:
-            ip = ipaddress.IPv4Address(address)
-            if not ip.is_loopback and not ip.is_link_local:
-                net = ipaddress.IPv4Network(f"{ip}/24", strict=False)
-                networks[str(net)] = (str(net), address)
-        except ipaddress.AddressValueError:
-            continue
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+                probe.connect(("192.0.2.1", 80))
+                addresses.add(probe.getsockname()[0])
+        except OSError:
+            pass
+        try:
+            addresses.update(socket.gethostbyname_ex(socket.gethostname())[2])
+        except OSError:
+            pass
+        for address in addresses:
+            try:
+                ip = ipaddress.IPv4Address(address)
+                if not ip.is_loopback and not ip.is_link_local:
+                    net = ipaddress.IPv4Network(f"{ip}/24", strict=False)
+                    networks.setdefault(str(net), (str(net), address, "detected"))
+            except ipaddress.AddressValueError:
+                continue
     return list(networks.values())
 
 
@@ -58,8 +79,11 @@ def discover_workers(wait=1.0):
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.settimeout(0.2)
-            for network, _ in networks:
-                sock.sendto(b"DISCOVER_WORKERS", (str(ipaddress.ip_network(network).broadcast_address), DISCOVERY_PORT))
+            for network, _, _ in networks:
+                try:
+                    sock.sendto(b"DISCOVER_WORKERS", (str(ipaddress.ip_network(network).broadcast_address), DISCOVERY_PORT))
+                except OSError:
+                    continue
             deadline = time.monotonic() + wait
             while time.monotonic() < deadline:
                 try:
@@ -74,7 +98,7 @@ def discover_workers(wait=1.0):
 
         # TCP fallback for LANs where broadcast discovery is blocked.
         candidates = []
-        for network, own_ip in networks:
+        for network, own_ip, _ in networks:
             candidates.extend(str(ip) for ip in ipaddress.ip_network(network).hosts() if str(ip) != own_ip)
         with ThreadPoolExecutor(max_workers=96) as pool:
             futures = [pool.submit(worker_info, ip) for ip in candidates if ip not in workers]
@@ -125,66 +149,267 @@ def run_job(worker, targets, count, timeout):
         return {"error": str(exc), "results": []}
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Pemantauan konektivitas IP terdistribusi (Tema 13).")
-    parser.add_argument("targets", nargs="+", help="Alamat IPv4 atau CIDR yang Anda berwenang pantau, mis. 192.168.1.10 192.168.1.0/28")
-    parser.add_argument("--workers", type=int, default=0, help="Jumlah worker jaringan yang digunakan (0=semua yang ditemukan)")
-    parser.add_argument("--count", type=int, default=4, help="Probe per IP untuk menghitung packet loss (default: 4)")
-    parser.add_argument("--timeout", type=float, default=1.0, help="Timeout tiap probe dalam detik (default: 1)")
-    args = parser.parse_args()
-    if args.count < 1 or args.count > 20 or not 0 < args.timeout <= 10:
-        parser.error("--count harus 1..20 dan --timeout harus 0..10 detik")
+def ask_integer(prompt, default, minimum, maximum):
+    value = input(f"{prompt} [{default}]: ").strip()
+    if not value:
+        return default
     try:
-        targets = parse_targets(args.targets)
-    except ValueError as exc:
-        parser.error(str(exc))
+        number = int(value)
+        if minimum <= number <= maximum:
+            return number
+    except ValueError:
+        pass
+    print(f"Input tidak valid; memakai nilai {default}.")
+    return default
+
+
+def ask_targets():
+    networks = local_subnets()
+    print("\nInterface IPv4 terdeteksi:")
+    if networks:
+        for network, own_ip, interface in networks:
+            print(f"  - {interface}: {own_ip} / {network}")
+    else:
+        print("  Tidak ada subnet lokal yang berhasil dideteksi.")
+    print("Masukkan IP/CIDR yang memang Anda berwenang pantau.")
+    entered = input("Target (pisahkan dengan spasi, kosong = seluruh subnet interface di atas): ").strip()
+    items = entered.split() if entered else [network for network, _, _ in networks]
+    if not items:
+        raise ValueError("Tidak ada target. Masukkan alamat IP atau CIDR secara manual.")
+    targets = parse_targets(items)
     if not targets:
-        parser.error("Tidak ada alamat host dalam daftar target")
+        raise ValueError("Tidak ada alamat host untuk dipantau.")
+    return targets
 
-    print("[+] Mencari worker melalui UDP discovery dan TCP sweep...")
-    workers = discover_workers()
-    local = {"host": socket.gethostname(), "ip": "127.0.0.1", "cores": os.cpu_count() or 1, "local": True}
-    workers.insert(0, local)
-    if args.workers:
-        if args.workers < 1:
-            parser.error("--workers harus lebih besar dari 0")
-        workers = workers[:args.workers]
 
-    print(f"[+] {len(workers)} node aktif; {len(targets)} alamat target; {args.count} probe/IP")
-    for i, worker in enumerate(workers, 1):
-        print(f"    {i}. {worker['host']} ({worker['ip']}) — {worker['cores']} core")
-
-    # Static equal chunks keep assignment simple; workers parallelize probes locally.
-    chunks = [targets[i::len(workers)] for i in range(len(workers))]
-    started = time.monotonic()
-    outputs = []
-    with ThreadPoolExecutor(max_workers=len(workers)) as pool:
-        futures = {pool.submit(monitor_local, chunk, args.count, args.timeout) if worker.get("local")
-                   else pool.submit(run_job, worker, chunk, args.count, args.timeout): worker
-                   for worker, chunk in zip(workers, chunks)}
-        for future in as_completed(futures):
-            worker = futures[future]
-            try:
-                outputs.append((worker, future.result()))
-            except Exception as exc:
-                outputs.append((worker, {"error": str(exc), "results": []}))
-    duration = time.monotonic() - started
-    rows = [row for _, output in outputs for row in output.get("results", [])]
-    failed_nodes = [(worker, output["error"]) for worker, output in outputs if output.get("error")]
+def print_results(rows, duration, errors=0, baseline=None, node_count=1):
     rows.sort(key=lambda row: ipaddress.IPv4Address(row["ip"]))
-    print("\nIP              STATUS       LATENCY (avg/min/max)       PACKET LOSS")
-    print("-" * 76)
+    print("\nIP              STATUS       LATENCY avg/min/max         PACKET LOSS")
+    print("-" * 78)
     for row in rows:
         if row.get("error"):
-            print(f"{row['ip']:<15} ERROR        -                         - ({row['error']})")
+            print(f"{row['ip']:<15} ERROR        -                          -")
             continue
         avg = "-" if row["avg_ms"] is None else f"{row['avg_ms']:.2f}/{row['min_ms']:.2f}/{row['max_ms']:.2f} ms"
-        print(f"{row['ip']:<15} {row['status']:<12} {avg:<25} {row['packet_loss_pct']:.1f}% ({row['lost']}/{row['sent']})")
-    for worker, error in failed_nodes:
-        print(f"Worker gagal {worker['host']} ({worker['ip']}): {error}")
-    errors = sum(bool(row.get("error")) for row in rows)
+        print(f"{row['ip']:<15} {row['status']:<12} {avg:<26} {row['packet_loss_pct']:.1f}% ({row['lost']}/{row['sent']})")
+    failed = sum(bool(row.get("error")) for row in rows)
     up = sum(row.get("status") == "UP" for row in rows)
-    print(f"\nSelesai {duration:.2f}s — UP: {up}, DOWN: {len(rows)-up-errors}, error: {errors + len(failed_nodes)}")
+    print(f"\nSelesai {duration:.2f}s — UP: {up}, DOWN: {len(rows)-up-failed}, error: {errors+failed}")
+    print(f"Throughput: {len(rows) / duration:.2f} IP/detik" if duration else "Throughput: -")
+    if baseline and duration:
+        speedup = baseline / duration
+        print(f"Speedup: {speedup:.2f}x | Efisiensi ({node_count} node): {speedup / node_count * 100:.1f}%")
+
+
+def monitor_sequential(targets, count, timeout):
+    from worker import monitor_one
+    rows = []
+    print(f"[jalan] Sequential: mulai memantau {len(targets)} target.", flush=True)
+    for index, ip in enumerate(targets, 1):
+        row = monitor_one((ip, count, timeout))
+        rows.append(row)
+        print(f"[progres] Sequential {index}/{len(targets)} — {ip} {row['status']}", flush=True)
+    return rows
+
+
+def select_workers(all_workers, count=0):
+    if count <= 0 or count >= len(all_workers):
+        return all_workers
+    return all_workers[:count]
+
+
+def monitor_distributed(targets, workers, count, timeout, weighted=False, simulate_failure=False, dynamic=False):
+    if not workers:
+        return [], 0.0, 0
+    if dynamic:
+        return monitor_dynamic(targets, workers, count, timeout)
+    if weighted:
+        total_cores = sum(max(1, worker["cores"]) for worker in workers)
+        chunks, start = [], 0
+        for i, worker in enumerate(workers):
+            size = len(targets) - start if i == len(workers) - 1 else round(len(targets) * worker["cores"] / total_cores)
+            chunks.append(targets[start:start + size])
+            start += size
+    else:
+        chunks = [targets[i::len(workers)] for i in range(len(workers))]
+
+    start_time = time.monotonic()
+    rows, failed_nodes = [], 0
+    assignments = []
+    injected_failure = next((i for i, node in enumerate(workers) if not node.get("local")), 0)
+    for i, (worker, chunk) in enumerate(zip(workers, chunks)):
+        if not chunk:
+            continue
+        if simulate_failure and i == injected_failure:
+            print(f"[simulasi] {worker['host']} gagal; {len(chunk)} target dimasukkan kembali ke antrean.")
+            failed_nodes += 1
+            assignments.append((None, chunk))
+        else:
+            assignments.append((worker, chunk))
+
+    with ThreadPoolExecutor(max_workers=max(1, len(assignments))) as pool:
+        future_map = {}
+        for worker, chunk in assignments:
+            node_name = worker["host"] if worker else "retry di master lokal"
+            print(f"[jalan] {node_name}: mulai {len(chunk)} target.", flush=True)
+            if worker is None:
+                future = pool.submit(monitor_local, chunk, count, timeout)
+            elif worker.get("local"):
+                future = pool.submit(monitor_local, chunk, count, timeout)
+            else:
+                future = pool.submit(run_job, worker, chunk, count, timeout)
+            future_map[future] = (worker, chunk)
+        for future in as_completed(future_map):
+            worker, chunk = future_map[future]
+            try:
+                result = future.result()
+            except Exception as exc:
+                result = {"error": str(exc), "results": []}
+            if result.get("error"):
+                failed_nodes += 1
+                print(f"[!] Worker {worker['host'] if worker else 'simulasi'} gagal ({result['error']}); retry lokal {len(chunk)} target.")
+                try:
+                    result = monitor_local(chunk, count, timeout)
+                except Exception as exc:
+                    result = {"results": [{"ip": ip, "error": str(exc)} for ip in chunk]}
+            print(f"[progres] {worker['host'] if worker else 'master retry'} selesai {len(result.get('results', []))}/{len(chunk)} target.", flush=True)
+            rows.extend(result.get("results", []))
+    return rows, time.monotonic() - start_time, failed_nodes
+
+
+def monitor_dynamic(targets, workers, count, timeout):
+    """Dispatch small batches to the next free node, so faster nodes get more work."""
+    start_time = time.monotonic()
+    batch_size = max(1, (len(targets) + len(workers) * 4 - 1) // (len(workers) * 4))
+    batches = iter([targets[i:i + batch_size] for i in range(0, len(targets), batch_size)])
+    rows, failed_nodes = [], 0
+
+    def submit(pool, worker):
+        try:
+            chunk = next(batches)
+        except StopIteration:
+            return None
+        print(f"[jalan] {worker['host']}: batch baru {len(chunk)} target.", flush=True)
+        if worker.get("local"):
+            future = pool.submit(monitor_local, chunk, count, timeout)
+        else:
+            future = pool.submit(run_job, worker, chunk, count, timeout)
+        return future, worker, chunk
+
+    with ThreadPoolExecutor(max_workers=len(workers)) as pool:
+        pending = {}
+        for worker in workers:
+            task = submit(pool, worker)
+            if task:
+                future, assigned_worker, chunk = task
+                pending[future] = (assigned_worker, chunk)
+        while pending:
+            completed = next(as_completed(tuple(pending)))
+            worker, chunk = pending.pop(completed)
+            try:
+                result = completed.result()
+            except Exception as exc:
+                result = {"error": str(exc), "results": []}
+            if result.get("error"):
+                failed_nodes += 1
+                print(f"[!] Worker {worker['host']} gagal; retry lokal {len(chunk)} target.")
+                try:
+                    result = monitor_local(chunk, count, timeout)
+                except Exception as exc:
+                    result = {"results": [{"ip": ip, "error": str(exc)} for ip in chunk]}
+            done = len(result.get("results", []))
+            print(f"[progres] {worker['host']}: batch selesai {done}/{len(chunk)} target.", flush=True)
+            rows.extend(result.get("results", []))
+            next_task = submit(pool, worker)
+            if next_task:
+                future, assigned_worker, next_chunk = next_task
+                pending[future] = (assigned_worker, next_chunk)
+    return rows, time.monotonic() - start_time, failed_nodes
+
+
+def main():
+    print("=" * 72)
+    print("DISTRIBUTED NETWORK MONITORING — TEMA 13")
+    print("=" * 72)
+    print("1. Pemantauan jaringan (semua worker)")
+    print("2. Pengujian sequential (baseline satu proses)")
+    print("3. Pengujian local parallel (multiprocessing pada master)")
+    print("4. Pengujian distributed (jumlah worker dipilih)")
+    print("5. Perbandingan load balancing (statis vs dinamis)")
+    print("6. Fault tolerance (simulasi worker gagal dan retry lokal)")
+    print("7. Scalability (variasi 1, 2, 4, 6, 9 worker + master)")
+    mode = input("Pilih pengujian [1]: ").strip() or "1"
+    if mode not in {str(i) for i in range(1, 8)}:
+        print("Pilihan tidak valid.")
+        return
+    count = ask_integer("Jumlah probe per IP", 4, 1, 20)
+    try:
+        timeout = float(input("Timeout per probe dalam detik [1]: ").strip() or "1")
+        if not 0 < timeout <= 10:
+            raise ValueError
+    except ValueError:
+        print("Timeout tidak valid; memakai 1 detik.")
+        timeout = 1.0
+    try:
+        targets = ask_targets()
+    except ValueError as exc:
+        print(f"[-] {exc}")
+        return
+    print(f"[+] Total target: {len(targets)} IP")
+
+    workers = [{"host": socket.gethostname(), "ip": "127.0.0.1", "cores": os.cpu_count() or 1, "local": True}]
+    if mode not in {"2", "3"}:
+        print("[+] Mencari worker dengan UDP discovery dan TCP sweep...")
+        workers.extend(w for w in discover_workers() if w["host"] != socket.gethostname())
+    print(f"[+] Node tersedia: {len(workers)} (termasuk master lokal)")
+
+    if mode == "2":
+        started = time.monotonic()
+        rows = monitor_sequential(targets, count, timeout)
+        print_results(rows, time.monotonic() - started)
+    elif mode == "3":
+        baseline_start = time.monotonic()
+        monitor_sequential(targets, count, timeout)
+        baseline = time.monotonic() - baseline_start
+        print(f"Baseline sequential: {baseline:.2f}s")
+        started = time.monotonic()
+        result = monitor_local(targets, count, timeout)
+        elapsed = time.monotonic() - started
+        print_results(result["results"], elapsed, baseline=baseline, node_count=1)
+    elif mode == "5":
+        static_baseline = None
+        for dynamic in (False, True):
+            label = "dinamis, batch dikirim ke node yang selesai lebih dulu" if dynamic else "statis, pembagian rata di awal"
+            print(f"\n[+] Distribusi {label}")
+            rows, elapsed, failed = monitor_distributed(targets, workers, count, timeout, dynamic=dynamic)
+            print_results(rows, elapsed, failed, baseline=static_baseline, node_count=len(workers))
+            if not dynamic:
+                static_baseline = elapsed
+    elif mode == "6":
+        rows, elapsed, failed = monitor_distributed(targets, workers, count, timeout, simulate_failure=True)
+        print_results(rows, elapsed, failed)
+        print(f"Recovery selesai; node gagal/simulasi yang dicatat: {failed}")
+    elif mode == "7":
+        baseline = None
+        for remote_count in (1, 2, 4, 6, 9):
+            selected = [workers[0]] + workers[1:1 + remote_count]
+            print(f"\n[+] Skalabilitas: {len(selected)-1} worker + master (target {remote_count} worker)")
+            rows, elapsed, failed = monitor_distributed(targets, selected, count, timeout)
+            print_results(rows, elapsed, failed, baseline=baseline, node_count=len(selected))
+            if baseline is None:
+                baseline = elapsed
+    else:
+        requested = 0
+        baseline = None
+        if mode == "4":
+            requested = ask_integer(f"Jumlah node yang dipakai (1-{len(workers)})", len(workers), 1, len(workers))
+            workers = select_workers(workers, requested)
+            baseline_start = time.monotonic()
+            monitor_sequential(targets, count, timeout)
+            baseline = time.monotonic() - baseline_start
+            print(f"Baseline sequential: {baseline:.2f}s")
+        rows, elapsed, failed = monitor_distributed(targets, workers, count, timeout)
+        print_results(rows, elapsed, failed, baseline=baseline, node_count=len(workers))
 
 
 def monitor_local(targets, count, timeout):
