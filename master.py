@@ -7,7 +7,6 @@ import re
 import socket
 import subprocess
 import time
-from itertools import islice
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DISCOVERY_PORT = 9999
@@ -116,11 +115,18 @@ def discover_workers(wait=1.0):
         # TCP fallback for LANs where broadcast discovery is blocked.
         candidates = []
         for network, own_ip, _ in networks:
-            hosts = (str(ip) for ip in ipaddress.ip_network(network).hosts() if str(ip) != own_ip)
-            # Bound each subnet independently so a large virtual/VPN subnet
-            # cannot consume the scan budget before the Wi-Fi/hotspot subnet.
-            batch = list(islice(hosts, MAX_TARGETS))
-            candidates.extend(batch)
+            subnet = ipaddress.ip_network(network)
+            first_host = int(subnet.network_address) + 1
+            last_host = int(subnet.broadcast_address) - 1
+            own_number = int(ipaddress.IPv4Address(own_ip))
+            # Scan near the master's address. Starting at the network's first
+            # address misses nearby nodes when a Wi-Fi subnet is larger than /20.
+            low = max(first_host, own_number - MAX_TARGETS // 2)
+            high = min(last_host, low + MAX_TARGETS - 1)
+            low = max(first_host, high - MAX_TARGETS + 1)
+            candidates.extend(str(ipaddress.IPv4Address(number))
+                              for number in range(low, high + 1)
+                              if number != own_number)
         candidates = list(dict.fromkeys(candidates))
         with ThreadPoolExecutor(max_workers=96) as pool:
             futures = [pool.submit(worker_info, ip) for ip in candidates if ip not in workers]
