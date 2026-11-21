@@ -163,25 +163,6 @@ def ask_integer(prompt, default, minimum, maximum):
     return default
 
 
-def ask_targets():
-    networks = local_subnets()
-    print("\nInterface IPv4 terdeteksi:")
-    if networks:
-        for network, own_ip, interface in networks:
-            print(f"  - {interface}: {own_ip} / {network}")
-    else:
-        print("  Tidak ada subnet lokal yang berhasil dideteksi.")
-    print("Masukkan IP/CIDR yang memang Anda berwenang pantau.")
-    entered = input("Target (pisahkan dengan spasi, kosong = seluruh subnet interface di atas): ").strip()
-    items = entered.split() if entered else [network for network, _, _ in networks]
-    if not items:
-        raise ValueError("Tidak ada target. Masukkan alamat IP atau CIDR secara manual.")
-    targets = parse_targets(items)
-    if not targets:
-        raise ValueError("Tidak ada alamat host untuk dipantau.")
-    return targets
-
-
 def print_results(rows, duration, errors=0, baseline=None, node_count=1):
     rows.sort(key=lambda row: ipaddress.IPv4Address(row["ip"]))
     print("\nIP              STATUS       LATENCY avg/min/max         PACKET LOSS")
@@ -350,18 +331,22 @@ def main():
     except ValueError:
         print("Timeout tidak valid; memakai 1 detik.")
         timeout = 1.0
-    try:
-        targets = ask_targets()
-    except ValueError as exc:
-        print(f"[-] {exc}")
+    print("[+] Mencari worker aktif pada semua interface jaringan...")
+    local_ips = {address for _, address, _ in local_subnets()}
+    remote_workers = [w for w in discover_workers()
+                      if w["ip"] not in local_ips and w["ip"] != "127.0.0.1"]
+    if not remote_workers:
+        print("[-] Tidak menemukan worker. Jalankan worker.py pada node lain dan pastikan port TCP 9998 serta UDP 9999 diizinkan.")
         return
-    print(f"[+] Total target: {len(targets)} IP")
+    targets = sorted({worker["ip"] for worker in remote_workers}, key=ipaddress.IPv4Address)
+    print("[+] Worker ditemukan:")
+    for worker in remote_workers:
+        print(f"    - {worker['host']} ({worker['ip']}) — {worker['cores']} core")
+    print(f"[+] Target monitoring otomatis: {len(targets)} IP worker")
 
     workers = [{"host": socket.gethostname(), "ip": "127.0.0.1", "cores": os.cpu_count() or 1, "local": True}]
-    if mode not in {"2", "3"}:
-        print("[+] Mencari worker dengan UDP discovery dan TCP sweep...")
-        workers.extend(w for w in discover_workers() if w["host"] != socket.gethostname())
-    print(f"[+] Node tersedia: {len(workers)} (termasuk master lokal)")
+    workers.extend(remote_workers)
+    print(f"[+] Node pemroses tersedia: {len(workers)} (master lokal + worker jaringan)")
 
     if mode == "2":
         started = time.monotonic()
