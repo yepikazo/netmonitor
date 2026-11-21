@@ -68,7 +68,7 @@ def local_subnets():
 
 def worker_info(ip):
     try:
-        with socket.create_connection((ip, TCP_PORT), timeout=0.35) as conn:
+        with socket.create_connection((ip, TCP_PORT), timeout=0.8) as conn:
             conn.settimeout(1)
             conn.sendall(json.dumps({"action": "info"}).encode() + b"\n")
             data = conn.makefile("rb").readline(4096)
@@ -115,14 +115,13 @@ def discover_workers(wait=1.0):
 
         # TCP fallback for LANs where broadcast discovery is blocked.
         candidates = []
-        remaining = MAX_TARGETS
         for network, own_ip, _ in networks:
             hosts = (str(ip) for ip in ipaddress.ip_network(network).hosts() if str(ip) != own_ip)
-            batch = list(islice(hosts, remaining))
+            # Bound each subnet independently so a large virtual/VPN subnet
+            # cannot consume the scan budget before the Wi-Fi/hotspot subnet.
+            batch = list(islice(hosts, MAX_TARGETS))
             candidates.extend(batch)
-            remaining -= len(batch)
-            if remaining <= 0:
-                break
+        candidates = list(dict.fromkeys(candidates))
         with ThreadPoolExecutor(max_workers=96) as pool:
             futures = [pool.submit(worker_info, ip) for ip in candidates if ip not in workers]
             for future in as_completed(futures):
@@ -507,12 +506,13 @@ def main():
     remote_workers = [worker for worker in discover_workers()
                       if worker["ip"] not in local_ips and worker["ip"] != "127.0.0.1"]
     if not remote_workers:
-        print("[-] Worker tidak ditemukan. Jalankan worker.py pada perangkat lain dan pastikan TCP 9998 serta UDP 9999 dapat dijangkau.")
-        return
+        print("[-] Discovery otomatis belum menemukan worker.")
+        print("    Pastikan Termux menjalankan versi worker.py Tema 13 terbaru (dengan protokol worker-v1).")
+        print("    Anda masih bisa memasukkan IP Termux dengan format: add 192.168.x.x")
 
     workers = [{"host": socket.gethostname(), "ip": "127.0.0.1",
                 "cores": os.cpu_count() or 1, "local": True}] + remote_workers
-    print("\n[+] Worker.py ditemukan:")
+    print("\n[+] Worker.py yang terdeteksi:")
     for index, worker in enumerate(remote_workers, 1):
         print(f"    [{index}] {worker['host']} ({worker['ip']}) — {worker['cores']} core")
     print(f"[+] Master lokal juga tersedia sebagai node komputasi ({workers[0]['cores']} core).")

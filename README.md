@@ -82,6 +82,18 @@ ip route
 
 Pastikan alamat kedua perangkat berada pada subnet yang sama. Gunakan alamat IPv4 Android yang ditampilkan di Termux pada perintah `add <IP>` jika broadcast discovery/TCP sweep tetap tidak menemukan worker.
 
+### Jika worker Termux belum terdeteksi
+
+Master memeriksa penanda protokol `tema13-network-monitor-worker-v1`. Salin versi terbaru `worker.py` ke perangkat Android, hentikan proses worker lama (`Ctrl+C`), lalu jalankan ulang `python worker.py`. Banner worker harus menampilkan `Protokol discovery: tema13-network-monitor-worker-v1`. Master hanya mendaftarkan worker yang menjawab protokol ini.
+
+Di Arch, periksa bahwa port TCP worker dapat dijangkau (ganti IP dengan alamat Android):
+
+```sh
+nc -vz 192.168.43.1 9998
+```
+
+Jika `nc` belum terpasang, instal paket `openbsd-netcat` dengan `sudo pacman -S openbsd-netcat`. Pastikan alamat Android yang dipakai benar dari `ip -4 addr` di Termux; `192.168.43.1` hanya contoh. Pastikan juga Arch tersambung ke hotspot Android dan fitur client/AP isolation tidak memblokir komunikasi. Jika TCP berhasil tetapi discovery otomatis gagal, di prompt node master ketik `add <IP-Android>`.
+
 ### Windows (PowerShell sebagai Administrator)
 
 ```powershell

@@ -137,6 +137,7 @@ def main():
     threading.Thread(target=udp_discovery_responder, daemon=True).start()
     print(f"Network Monitor Worker — {socket.gethostname()} ({os.cpu_count() or 1} core)")
     print(f"Menunggu master pada TCP {TCP_PORT}, discovery UDP {DISCOVERY_PORT}")
+    print(f"Protokol discovery: {WORKER_SERVICE}")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(("", TCP_PORT))
