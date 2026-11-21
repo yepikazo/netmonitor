@@ -1,15 +1,15 @@
 # Distributed Network Monitoring — Tema 13
 
-Aplikasi master–worker untuk memantau konektivitas alamat IPv4. **Jaringan Wi-Fi/hotspot adalah cara koneksi yang disarankan/default untuk percobaan ini**: hubungkan master dan semua worker ke Wi-Fi/hotspot yang sama. Master menemukan worker menggunakan UDP broadcast dan TCP sweep fallback seperti pola `masterexample.py`; worker menerima tugas melalui TCP, lalu membagi target ke beberapa proses CPU. Daftar worker adalah node pemroses, sedangkan alamat IP/CIDR yang dimonitor dimasukkan operator secara eksplisit.
+Aplikasi master–worker untuk memantau konektivitas alamat IPv4. **Jaringan Wi-Fi/hotspot adalah cara koneksi yang disarankan/default untuk percobaan ini**: hubungkan master dan semua worker ke Wi-Fi/hotspot yang sama. Master menemukan worker menggunakan UDP broadcast dan TCP sweep fallback seperti pola `masterexample.py`; IP setiap worker yang ditemukan otomatis menjadi target monitoring.
 
 ## Menjalankan
 
 1. Hubungkan master dan semua worker ke **Wi-Fi/hotspot yang sama** dan pasang Python 3. Pada setiap komputer worker, izinkan TCP `9998` serta UDP `9999` (perintah di bawah).
 2. Jalankan `python worker.py` di setiap worker. Worker harus memakai versi terbaru agar master dapat memverifikasi protokolnya.
-3. Jalankan `python master.py` di master. Program langsung mencari worker, lalu meminta pilihan node, target IP/CIDR, jumlah probe, dan timeout.
+3. Jalankan `python master.py` di master. Program langsung mencari worker, lalu meminta pilihan node pemroses, jumlah probe, dan timeout. Semua worker yang ditemukan otomatis dipantau.
 4. Tekan Enter untuk memakai semua node atau masukkan indeks/rentang seperti `0-3`. Jika discovery gagal, masukkan `add <IP>`; IP hanya akan diterima jika merespons protokol worker Tema 13 yang valid.
 
-Contoh target: `192.168.1.1, 192.168.1.10` atau `192.168.1.0/28`. Target CIDR dibatasi maksimal 4096 alamat. Worker yang ditemukan tidak otomatis dijadikan target monitoring.
+Jika discovery gagal, masukkan IP worker dengan `add <IP>` pada prompt node. Master hanya menerima IP yang merespons protokol worker Tema 13.
 
 ## Membuka port firewall pada worker
 

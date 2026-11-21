@@ -224,24 +224,6 @@ def monitor_sequential(targets, count, timeout):
     return rows
 
 
-def read_targets():
-    """Ask for explicit monitoring targets; never infer targets from discovered workers."""
-    print("Masukkan alamat IPv4/CIDR yang memang diizinkan untuk dipantau.")
-    print("Contoh: 192.168.1.1, 192.168.1.10 atau 192.168.1.0/28")
-    while True:
-        raw = input("Target (pisahkan dengan spasi/koma): ").strip()
-        if not raw:
-            print("Target harus diisi.")
-            continue
-        try:
-            targets = parse_targets(raw.replace(",", " ").split())
-            if not targets:
-                raise ValueError("tidak ada alamat host pada rentang tersebut")
-            return targets
-        except ValueError as exc:
-            print(exc)
-
-
 def choose_workers(workers):
     print("\nNode pemroses tersedia:")
     for index, worker in enumerate(workers):
@@ -434,7 +416,8 @@ def evaluation_main():
                       if w["ip"] not in local_ips and w["ip"] != "127.0.0.1"]
     if not remote_workers:
         print("[-] Tidak menemukan worker jaringan; hanya pengujian sequential/local yang dapat dijalankan.")
-    targets = read_targets()
+    targets = sorted({worker["ip"] for worker in remote_workers}, key=ipaddress.IPv4Address)
+    print(f"[+] Target monitoring otomatis: semua {len(targets)} worker yang terdeteksi.")
     print("[+] Worker ditemukan:")
     for worker in remote_workers:
         print(f"    - {worker['host']} ({worker['ip']}) — {worker['cores']} core")
@@ -524,7 +507,12 @@ def main():
     print(f"[+] Master lokal juga tersedia sebagai node komputasi ({workers[0]['cores']} core).")
 
     selected = choose_workers(workers)
-    targets = read_targets()
+    targets = sorted({worker["ip"] for worker in workers if not worker.get("local")},
+                     key=ipaddress.IPv4Address)
+    print(f"[+] Target monitoring otomatis: semua {len(targets)} worker yang terdeteksi.")
+    if not targets:
+        print("[-] Tidak ada worker untuk dipantau. Jalankan worker.py atau tambahkan IP worker yang valid.")
+        return
     count = ask_integer("Jumlah probe per IP", 4, 1, 20)
     try:
         timeout = float(input("Timeout per probe dalam detik [1]: ").strip() or "1")
