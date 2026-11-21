@@ -5,9 +5,9 @@ Aplikasi master–worker untuk memantau konektivitas alamat IPv4. **Jaringan Wi-
 ## Menjalankan
 
 1. Hubungkan master dan semua worker ke **Wi-Fi/hotspot yang sama** dan pasang Python 3. Pada setiap komputer worker, izinkan TCP `9998` serta UDP `9999` (perintah di bawah).
-2. Di setiap worker jalankan `python worker.py`.
-3. Di master jalankan `python master.py`, pilih skenario pengujian, jumlah probe dan timeout, lalu masukkan alamat IP/CIDR yang diizinkan.
-4. Pilih worker dari daftar yang ditemukan. Tekan Enter untuk memakai seluruh node atau masukkan indeks/rentang seperti `0-3`. Jika worker Termux tidak terdeteksi, masukkan `add <IP-Termux>` pada prompt pilihan node, misalnya `add 192.168.43.123`.
+2. Jalankan `python worker.py` di setiap worker. Worker harus memakai versi terbaru agar master dapat memverifikasi protokolnya.
+3. Jalankan `python master.py` di master. Program langsung mencari worker, lalu meminta pilihan node, target IP/CIDR, jumlah probe, dan timeout.
+4. Tekan Enter untuk memakai semua node atau masukkan indeks/rentang seperti `0-3`. Jika discovery gagal, masukkan `add <IP>`; IP hanya akan diterima jika merespons protokol worker Tema 13 yang valid.
 
 Contoh target: `192.168.1.1, 192.168.1.10` atau `192.168.1.0/28`. Target CIDR dibatasi maksimal 4096 alamat. Worker yang ditemukan tidak otomatis dijadikan target monitoring.
 
@@ -92,9 +92,9 @@ Get-NetFirewallRule -DisplayName "Tema13 Worker *"
 
 Gunakan profil `Private` untuk jaringan lab/rumah yang dipercaya. Jika jaringan yang digunakan berprofil Public, ubah `-Profile Private,Domain` menjadi `-Profile Any` hanya bila memang diperlukan dan diizinkan oleh kebijakan jaringan. Di master tidak perlu membuka port inbound untuk komunikasi task; master membuat koneksi keluar ke worker.
 
-## Skenario dan butir evaluasi
+## Alur normal dan evaluasi
 
-Menu master menyediakan sequential baseline, local multiprocessing, distributed processing, perbandingan pembagian statis/dinamis, simulasi worker gagal dengan retry lokal, dan scalability untuk 1/2/4/6/9 worker. Pada scalability, master lokal ikut sebagai node pemroses; skenario worker yang jumlahnya belum tersedia dilewati. Untuk memenuhi pengujian fisik sesuai PDF diperlukan 1 master dan 9 worker.
+Alur normal tidak menampilkan menu skenario: program menjalankan sequential baseline, local parallel pada master, lalu distributed monitoring dengan pembagian dinamis. Untuk pengujian lengkap sesuai PDF (perbandingan statis/dinamis, simulasi fault tolerance, dan scalability 1/2/4/6/9 worker), jalankan `python master.py --evaluasi`. Pada scalability, master lokal ikut sebagai node pemroses; skenario worker yang belum tersedia dilewati. Untuk memenuhi pengujian fisik sesuai PDF diperlukan 1 master dan 9 worker.
 
 Hasil menampilkan waktu eksekusi, throughput, speedup dan efficiency bila ada baseline, jumlah node, status UP/DOWN, latency rata-rata/minimum/maksimum, packet loss, serta informasi CPU dan peak memory master yang tersedia pada platform. Worker mencetak progres target. Simulasi fault tolerance melaporkan waktu retry/recovery lokal. Catat juga penggunaan CPU/memori tiap node dari OS saat percobaan untuk analisis cluster; metrik lokal master saja bukan pengukuran agregat seluruh node.
 

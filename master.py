@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 DISCOVERY_PORT = 9999
 TCP_PORT = 9998
 MAX_TARGETS = 4096
+WORKER_SERVICE = "tema13-network-monitor-worker-v1"
 
 try:
     import resource
@@ -72,6 +73,8 @@ def worker_info(ip):
             conn.sendall(json.dumps({"action": "info"}).encode() + b"\n")
             data = conn.makefile("rb").readline(4096)
             info = json.loads(data.decode())
+            if info.get("service") != WORKER_SERVICE:
+                return None
             info["ip"] = ip
             return info
     except (OSError, ValueError, json.JSONDecodeError):
@@ -101,6 +104,8 @@ def discover_workers(wait=1.0):
                 try:
                     raw, addr = sock.recvfrom(2048)
                     info = json.loads(raw.decode())
+                    if info.get("service") != WORKER_SERVICE:
+                        continue
                     info["ip"] = addr[0]
                     workers[addr[0]] = info
                 except socket.timeout:
@@ -395,7 +400,7 @@ def monitor_dynamic(targets, workers, count, timeout):
     return rows, time.monotonic() - start_time, failed_nodes
 
 
-def main():
+def evaluation_main():
     print("=" * 72)
     print("DISTRIBUTED NETWORK MONITORING — TEMA 13")
     print("=" * 72)
@@ -493,10 +498,62 @@ def main():
         print_results(rows, elapsed, failed, baseline=baseline, node_count=len(workers))
 
 
+def main():
+    print("=" * 68)
+    print("DISTRIBUTED NETWORK MONITORING — TEMA 13")
+    print("=" * 68)
+    print("[*] Mencari worker.py yang aktif di Wi-Fi/hotspot atau LAN...")
+    local_ips = {address for _, address, _ in local_subnets()}
+    remote_workers = [worker for worker in discover_workers()
+                      if worker["ip"] not in local_ips and worker["ip"] != "127.0.0.1"]
+    if not remote_workers:
+        print("[-] Worker tidak ditemukan. Jalankan worker.py pada perangkat lain dan pastikan TCP 9998 serta UDP 9999 dapat dijangkau.")
+        return
+
+    workers = [{"host": socket.gethostname(), "ip": "127.0.0.1",
+                "cores": os.cpu_count() or 1, "local": True}] + remote_workers
+    print("\n[+] Worker.py ditemukan:")
+    for index, worker in enumerate(remote_workers, 1):
+        print(f"    [{index}] {worker['host']} ({worker['ip']}) — {worker['cores']} core")
+    print(f"[+] Master lokal juga tersedia sebagai node komputasi ({workers[0]['cores']} core).")
+
+    selected = choose_workers(workers)
+    targets = read_targets()
+    count = ask_integer("Jumlah probe per IP", 4, 1, 20)
+    try:
+        timeout = float(input("Timeout per probe dalam detik [1]: ").strip() or "1")
+        if not 0 < timeout <= 10:
+            raise ValueError
+    except ValueError:
+        print("Timeout tidak valid; memakai 1 detik.")
+        timeout = 1.0
+
+    print(f"\n[+] {len(targets)} target, {len(selected)} node pemroses.")
+    print("[+] Menjalankan baseline sequential...")
+    started = time.monotonic()
+    monitor_sequential(targets, count, timeout)
+    baseline = time.monotonic() - started
+    print(f"[hasil] Sequential: {baseline:.2f}s")
+
+    print("\n[+] Menjalankan local parallel pada master...")
+    started = time.monotonic()
+    local_result = monitor_local(targets, count, timeout)
+    local_duration = time.monotonic() - started
+    print_results(local_result["results"], local_duration, baseline=baseline, node_count=1)
+
+    print("\n[+] Menjalankan pemantauan distributed dengan pembagian dinamis...")
+    rows, duration, failed = monitor_distributed(targets, selected, count, timeout, dynamic=True)
+    print_results(rows, duration, failed, baseline=baseline, node_count=len(selected))
+
+
 def monitor_local(targets, count, timeout):
     from worker import monitor_targets
     return {"results": monitor_targets(targets, count, timeout)}
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) == 2 and sys.argv[1] == "--evaluasi":
+        evaluation_main()
+    else:
+        main()

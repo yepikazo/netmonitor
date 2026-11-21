@@ -14,6 +14,7 @@ import time
 DISCOVERY_PORT = 9999
 TCP_PORT = 9998
 MAX_TARGETS = 4096
+WORKER_SERVICE = "tema13-network-monitor-worker-v1"
 
 
 def ping_once(ip, timeout):
@@ -95,7 +96,8 @@ def handle_client(conn, addr):
                 return
             request = json.loads(raw.decode())
             if request.get("action") == "info":
-                send_line(conn, {"host": socket.gethostname(), "cores": os.cpu_count() or 1, "port": TCP_PORT})
+                send_line(conn, {"service": WORKER_SERVICE, "host": socket.gethostname(),
+                                 "cores": os.cpu_count() or 1, "port": TCP_PORT})
                 return
             if request.get("action") != "monitor":
                 send_line(conn, {"error": "aksi tidak dikenal"})
@@ -124,7 +126,8 @@ def udp_discovery_responder():
             try:
                 data, addr = sock.recvfrom(1024)
                 if data == b"DISCOVER_WORKERS":
-                    info = {"host": socket.gethostname(), "cores": os.cpu_count() or 1, "port": TCP_PORT}
+                    info = {"service": WORKER_SERVICE, "host": socket.gethostname(),
+                            "cores": os.cpu_count() or 1, "port": TCP_PORT}
                     sock.sendto(json.dumps(info).encode(), addr)
             except OSError:
                 continue
