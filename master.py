@@ -7,11 +7,17 @@ import re
 import socket
 import subprocess
 import time
+from itertools import islice
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 DISCOVERY_PORT = 9999
 TCP_PORT = 9998
 MAX_TARGETS = 4096
+
+try:
+    import resource
+except ImportError:  # resource is unavailable on Windows
+    resource = None
 
 
 def local_subnets():
@@ -98,8 +104,14 @@ def discover_workers(wait=1.0):
 
         # TCP fallback for LANs where broadcast discovery is blocked.
         candidates = []
+        remaining = MAX_TARGETS
         for network, own_ip, _ in networks:
-            candidates.extend(str(ip) for ip in ipaddress.ip_network(network).hosts() if str(ip) != own_ip)
+            hosts = (str(ip) for ip in ipaddress.ip_network(network).hosts() if str(ip) != own_ip)
+            batch = list(islice(hosts, remaining))
+            candidates.extend(batch)
+            remaining -= len(batch)
+            if remaining <= 0:
+                break
         with ThreadPoolExecutor(max_workers=96) as pool:
             futures = [pool.submit(worker_info, ip) for ip in candidates if ip not in workers]
             for future in as_completed(futures):
@@ -177,6 +189,9 @@ def print_results(rows, duration, errors=0, baseline=None, node_count=1):
     up = sum(row.get("status") == "UP" for row in rows)
     print(f"\nSelesai {duration:.2f}s — UP: {up}, DOWN: {len(rows)-up-failed}, error: {errors+failed}")
     print(f"Throughput: {len(rows) / duration:.2f} IP/detik" if duration else "Throughput: -")
+    cpu_seconds = max(0.0, time.process_time())
+    peak_memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if resource else "tidak tersedia"
+    print(f"CPU master (kumulatif proses): {cpu_seconds:.2f}s | Peak memory master: {peak_memory} (platform unit)")
     if baseline and duration:
         speedup = baseline / duration
         print(f"Speedup: {speedup:.2f}x | Efisiensi ({node_count} node): {speedup / node_count * 100:.1f}%")
@@ -191,6 +206,51 @@ def monitor_sequential(targets, count, timeout):
         rows.append(row)
         print(f"[progres] Sequential {index}/{len(targets)} — {ip} {row['status']}", flush=True)
     return rows
+
+
+def read_targets():
+    """Ask for explicit monitoring targets; never infer targets from discovered workers."""
+    print("Masukkan alamat IPv4/CIDR yang memang diizinkan untuk dipantau.")
+    print("Contoh: 192.168.1.1, 192.168.1.10 atau 192.168.1.0/28")
+    while True:
+        raw = input("Target (pisahkan dengan spasi/koma): ").strip()
+        if not raw:
+            print("Target harus diisi.")
+            continue
+        try:
+            targets = parse_targets(raw.replace(",", " ").split())
+            if not targets:
+                raise ValueError("tidak ada alamat host pada rentang tersebut")
+            return targets
+        except ValueError as exc:
+            print(exc)
+
+
+def choose_workers(workers):
+    print("\nNode pemroses tersedia:")
+    for index, worker in enumerate(workers):
+        label = "Master lokal" if worker.get("local") else "Worker LAN"
+        print(f"  [{index}] {worker['host']} ({worker['ip']}) — {worker['cores']} core, {label}")
+    print("Pilih node dengan indeks, rentang (contoh 0-3), atau all/ENTER.")
+    while True:
+        value = input("Node yang digunakan [all]: ").strip().lower()
+        if not value or value in {"all", "*"}:
+            return workers
+        indices = []
+        try:
+            for part in value.replace(" ", ",").split(","):
+                if not part:
+                    continue
+                if "-" in part:
+                    first, last = map(int, part.split("-", 1))
+                    indices.extend(range(first, last + 1))
+                else:
+                    indices.append(int(part))
+            if indices and all(0 <= index < len(workers) for index in indices):
+                return [workers[index] for index in dict.fromkeys(indices)]
+        except ValueError:
+            pass
+        print("Pilihan node tidak valid.")
 
 
 def select_workers(all_workers, count=0):
@@ -249,10 +309,12 @@ def monitor_distributed(targets, workers, count, timeout, weighted=False, simula
             if result.get("error"):
                 failed_nodes += 1
                 print(f"[!] Worker {worker['host'] if worker else 'simulasi'} gagal ({result['error']}); retry lokal {len(chunk)} target.")
+                recovery_started = time.monotonic()
                 try:
                     result = monitor_local(chunk, count, timeout)
                 except Exception as exc:
                     result = {"results": [{"ip": ip, "error": str(exc)} for ip in chunk]}
+                print(f"[pemulihan] Retry lokal selesai dalam {time.monotonic() - recovery_started:.2f}s.")
             print(f"[progres] {worker['host'] if worker else 'master retry'} selesai {len(result.get('results', []))}/{len(chunk)} target.", flush=True)
             rows.extend(result.get("results", []))
     return rows, time.monotonic() - start_time, failed_nodes
@@ -294,10 +356,12 @@ def monitor_dynamic(targets, workers, count, timeout):
             if result.get("error"):
                 failed_nodes += 1
                 print(f"[!] Worker {worker['host']} gagal; retry lokal {len(chunk)} target.")
+                recovery_started = time.monotonic()
                 try:
                     result = monitor_local(chunk, count, timeout)
                 except Exception as exc:
                     result = {"results": [{"ip": ip, "error": str(exc)} for ip in chunk]}
+                print(f"[pemulihan] Retry lokal selesai dalam {time.monotonic() - recovery_started:.2f}s.")
             done = len(result.get("results", []))
             print(f"[progres] {worker['host']}: batch selesai {done}/{len(chunk)} target.", flush=True)
             rows.extend(result.get("results", []))
@@ -336,17 +400,23 @@ def main():
     remote_workers = [w for w in discover_workers()
                       if w["ip"] not in local_ips and w["ip"] != "127.0.0.1"]
     if not remote_workers:
-        print("[-] Tidak menemukan worker. Jalankan worker.py pada node lain dan pastikan port TCP 9998 serta UDP 9999 diizinkan.")
-        return
-    targets = sorted({worker["ip"] for worker in remote_workers}, key=ipaddress.IPv4Address)
+        print("[-] Tidak menemukan worker jaringan; hanya pengujian sequential/local yang dapat dijalankan.")
+    targets = read_targets()
     print("[+] Worker ditemukan:")
     for worker in remote_workers:
         print(f"    - {worker['host']} ({worker['ip']}) — {worker['cores']} core")
-    print(f"[+] Target monitoring otomatis: {len(targets)} IP worker")
+    print(f"[+] Target monitoring: {len(targets)} alamat IPv4 eksplisit")
 
     workers = [{"host": socket.gethostname(), "ip": "127.0.0.1", "cores": os.cpu_count() or 1, "local": True}]
     workers.extend(remote_workers)
     print(f"[+] Node pemroses tersedia: {len(workers)} (master lokal + worker jaringan)")
+
+    if mode in {"1", "4", "5", "6", "7"} and remote_workers:
+        workers = choose_workers(workers)
+    if mode == "7":
+        remote_count = sum(not worker.get("local") for worker in workers)
+        if remote_count < 9:
+            print(f"[!] PDF meminta 9 worker untuk skenario penuh; saat ini hanya {remote_count} worker jaringan terpilih.")
 
     if mode == "2":
         started = time.monotonic()
@@ -377,7 +447,10 @@ def main():
     elif mode == "7":
         baseline = None
         for remote_count in (1, 2, 4, 6, 9):
-            selected = [workers[0]] + workers[1:1 + remote_count]
+            selected = [workers[0]] + [node for node in workers[1:] if not node.get("local")][:remote_count]
+            if len(selected) == 1:
+                print(f"[!] Lewati skenario {remote_count} worker: worker jaringan tidak tersedia.")
+                continue
             print(f"\n[+] Skalabilitas: {len(selected)-1} worker + master (target {remote_count} worker)")
             rows, elapsed, failed = monitor_distributed(targets, selected, count, timeout)
             print_results(rows, elapsed, failed, baseline=baseline, node_count=len(selected))

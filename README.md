@@ -1,43 +1,25 @@
-# Distributed Network Monitoring (Tema 13)
+# Distributed Network Monitoring — Tema 13
 
-Aplikasi master–worker untuk memantau alamat IPv4 yang ditentukan operator. Master menemukan worker melalui UDP broadcast, memakai TCP sweep LAN sebagai fallback, membagi daftar target di antara node, lalu menggabungkan status, latency ICMP, dan packet loss. Setiap node menjalankan probe target secara paralel dengan `ProcessPoolExecutor`.
+Aplikasi master–worker untuk memantau konektivitas alamat IPv4. Master menemukan worker di LAN menggunakan UDP broadcast dan TCP sweep fallback seperti pola `masterexample.py`; worker menerima tugas melalui TCP, lalu membagi target ke beberapa proses CPU. Daftar worker adalah node pemroses, sedangkan alamat IP/CIDR yang dimonitor dimasukkan operator secara eksplisit.
 
 ## Menjalankan
 
-1. Pastikan semua komputer berada pada LAN yang sama dan Python 3 tersedia.
-2. Izinkan TCP port `9998` dan UDP port `9999` pada firewall komputer worker.
-3. Di setiap komputer worker, jalankan:
+1. Hubungkan komputer ke LAN yang sama dan pasang Python 3. Izinkan TCP `9998` serta UDP `9999` pada firewall worker.
+2. Di setiap worker jalankan `python worker.py`.
+3. Di master jalankan `python master.py`, pilih skenario pengujian, jumlah probe dan timeout, lalu masukkan alamat IP/CIDR yang diizinkan.
+4. Pilih worker dari daftar yang ditemukan. Tekan Enter untuk memakai seluruh node atau masukkan indeks/rentang seperti `0-3`.
 
-   ```sh
-   python worker.py
-   ```
+Contoh target: `192.168.1.1, 192.168.1.10` atau `192.168.1.0/28`. Target CIDR dibatasi maksimal 4096 alamat. Worker yang ditemukan tidak otomatis dijadikan target monitoring.
 
-4. Di komputer master, jalankan dengan target yang memang Anda berwenang pantau:
+## Skenario dan butir evaluasi
 
-   ```sh
-   python master.py 192.168.1.1 192.168.1.10 192.168.1.0/28
-   ```
+Menu master menyediakan sequential baseline, local multiprocessing, distributed processing, perbandingan pembagian statis/dinamis, simulasi worker gagal dengan retry lokal, dan scalability untuk 1/2/4/6/9 worker. Pada scalability, master lokal ikut sebagai node pemroses; skenario worker yang jumlahnya belum tersedia dilewati. Untuk memenuhi pengujian fisik sesuai PDF diperlukan 1 master dan 9 worker.
 
-   Contoh pengaturan jumlah probe dan jumlah worker:
+Hasil menampilkan waktu eksekusi, throughput, speedup dan efficiency bila ada baseline, jumlah node, status UP/DOWN, latency rata-rata/minimum/maksimum, packet loss, serta informasi CPU dan peak memory master yang tersedia pada platform. Worker mencetak progres target. Simulasi fault tolerance melaporkan waktu retry/recovery lokal. Catat juga penggunaan CPU/memori tiap node dari OS saat percobaan untuk analisis cluster; metrik lokal master saja bukan pengukuran agregat seluruh node.
 
-   ```sh
-   python master.py 192.168.1.0/28 --count 5 --timeout 1 --workers 4
-   ```
+## Interpretasi dan batasan
 
-Tanpa `--workers`, master memakai semua worker yang ditemukan ditambah proses lokal pada master. CIDR dibatasi maksimal 4096 alamat; untuk memantau satu jaringan besar, pecah menjadi rentang yang lebih kecil. Target dan discovery worker adalah dua hal berbeda: worker ditemukan di LAN, sedangkan daftar IP yang dipantau diberikan eksplisit saat menjalankan master.
-
-## Hasil
-
-- `UP` jika sedikitnya satu probe ICMP mendapat balasan; `DOWN` jika semuanya timeout/gagal.
-- Latency ditampilkan sebagai rata-rata/minimum/maksimum waktu round trip probe yang berhasil.
-- Packet loss dihitung dari jumlah probe yang tidak mendapat balasan.
-- Hasil `ERROR` menunjukkan masalah saat master berkomunikasi dengan worker.
-
-ICMP ping mungkin perlu diizinkan oleh firewall target. Ping yang diblokir akan terlihat sebagai `DOWN`, sehingga interpretasikan hasil sesuai kebijakan jaringan. Worker membutuhkan executable `ping` sistem operasi (`ping` tersedia pada Windows, Linux, dan macOS).
-
-## Catatan implementasi
-
-- Discovery UDP memakai port `9999`; worker menerima task dan permintaan info melalui TCP port `9998`.
-- TCP sweep otomatis hanya mencari worker yang membuka port `9998`; ia tidak menentukan target monitoring.
-- Pembagian tugas saat ini dibagi merata menurut jumlah IP. Worker menjalankan target-targetnya secara multiprocessing.
-- Bila jumlah target sedikit, sejumlah worker dapat menerima bagian kosong; node tetap terhitung sebagai worker aktif.
+- `UP` berarti satu atau lebih probe ICMP menerima balasan; `DOWN` berarti semua probe gagal/timeout. Ping yang diblokir firewall juga dapat tampak `DOWN`.
+- Worker discovery memakai UDP `9999`; informasi dan tugas dikirim melalui TCP `9998`. TCP sweep memindai subnet lokal yang terdeteksi untuk mencari worker.
+- Setiap worker memakai `ProcessPoolExecutor` untuk memproses target secara paralel. Static membagi daftar target merata; dynamic memberikan batch berikutnya ke node yang lebih dulu selesai.
+- Jika worker gagal, task-nya dimasukkan kembali dengan retry pada master lokal. Untuk laporan, dokumentasikan topologi, konfigurasi node/jaringan, hasil percobaan terkontrol, dan analisis tiap metrik. Video demonstrasi harus menunjukkan minimal 10 node fisik sesuai PDF.
