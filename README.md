@@ -4,7 +4,7 @@ Aplikasi master–worker untuk memantau konektivitas alamat IPv4. **Jaringan Wi-
 
 ## Menjalankan
 
-Panduan terpisah tersedia: [setup Windows/Linux](PANDUAN_SETUP.md) dan [alur pengetesan](ALUR_PENGUJIAN.md).
+Panduan terpisah tersedia: [setup Windows/Linux](PANDUAN_SETUP.md), [alur pengetesan](ALUR_PENGUJIAN.md), [skenario video demo 5 menit](SKENARIO_DEMO_5_MENIT.md), dan [FAQ](frequently_asked_question.md).
 
 1. Hubungkan master dan semua worker ke **Wi-Fi/hotspot yang sama** dan pasang Python 3 serta `psutil` pada semua node. Contoh setup Arch/Termux ada di bawah. Pada setiap worker, izinkan TCP `9998` serta UDP `9999` (perintah firewall di bawah).
 2. Jalankan `python worker.py` di setiap worker. Worker harus memakai versi terbaru agar master dapat memverifikasi protokolnya.
@@ -28,6 +28,15 @@ python -m pip install -r requirements.txt
 ```
 
 Di Termux, jika Python belum terpasang, jalankan `pkg install python` terlebih dahulu. Aktifkan kembali `.venv` setiap membuka sesi terminal baru sebelum menjalankan `python worker.py` atau `python master.py`.
+
+## Cara Kerja Program
+
+1. **Worker menunggu master.** `worker.py` membuka TCP `9998` untuk permintaan info dan task, serta UDP `9999` untuk menjawab discovery. Worker menampilkan notifikasi saat menerima discovery master dan setelah setiap task/batch selesai.
+2. **Master memilih jaringan Wi-Fi.** Master memilih satu subnet Wi-Fi yang terdeteksi, mengirim UDP broadcast, lalu memakai TCP sweep pada subnet yang sama sebagai fallback. Hanya host yang menjawab protokol worker Tema 13 yang didaftarkan.
+3. **Target dibuat otomatis.** Semua IP worker yang ditemukan menjadi target monitoring. Pilihan node pemroses terpisah dari target: operator dapat memilih node yang menjalankan komputasi, tetapi semua IP worker yang ditemukan tetap dipantau.
+4. **Setiap target diprobe.** Worker menjalankan ping ICMP sebanyak jumlah probe yang dipilih. Hasil per IP memuat status UP/DOWN, RTT, dan packet loss. RTT dibaca dari keluaran `ping`; nilai `time<1ms` dicatat sebagai estimasi setengah batas tersebut.
+5. **Task diproses dan hasil digabung.** Master membagi daftar target ke node pemroses. Tiap node menjalankan target secara multiprocessing dengan `ProcessPoolExecutor`, kemudian mengirim hasil kembali melalui TCP. Pada mode dinamis, node yang lebih dulu selesai menerima batch berikutnya.
+6. **Metrik dan hasil disimpan.** Program mengukur waktu, throughput, speedup/efficiency jika ada baseline, recovery time, serta sampel CPU/RAM proses dan child process menggunakan `psutil`. Master menulis konfigurasi, hasil per target, metrik, dan analisis ke `hasil/hasil_monitoring.txt`; jika nama sudah ada, master menambahkan nomor di depan nama file.
 
 ## Membuka port firewall pada worker
 
