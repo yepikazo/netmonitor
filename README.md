@@ -1,15 +1,29 @@
 # Distributed Network Monitoring — Tema 13
 
-Aplikasi master–worker untuk memantau konektivitas alamat IPv4. **Jaringan Wi-Fi/hotspot adalah cara koneksi yang disarankan/default untuk percobaan ini**: hubungkan master dan semua worker ke Wi-Fi/hotspot yang sama. Master menemukan worker menggunakan UDP broadcast dan TCP sweep fallback seperti pola `masterexample.py`; IP setiap worker yang ditemukan otomatis menjadi target monitoring.
+Aplikasi master–worker untuk memantau konektivitas alamat IPv4. **Jaringan Wi-Fi/hotspot adalah cara koneksi yang disarankan/default untuk percobaan ini**: hubungkan master dan semua worker ke Wi-Fi/hotspot yang sama. Master memilih satu subnet Wi-Fi (mengutamakan interface dengan default route), menemukan worker menggunakan UDP broadcast dan TCP sweep fallback seperti pola `masterexample.py`, lalu otomatis menjadikan IP worker yang ditemukan sebagai target monitoring.
 
 ## Menjalankan
 
-1. Hubungkan master dan semua worker ke **Wi-Fi/hotspot yang sama** dan pasang Python 3. Pada setiap komputer worker, izinkan TCP `9998` serta UDP `9999` (perintah di bawah).
+Panduan terpisah tersedia: [setup Windows/Linux](PANDUAN_SETUP.md) dan [alur pengetesan](ALUR_PENGUJIAN.md).
+
+1. Hubungkan master dan semua worker ke **Wi-Fi/hotspot yang sama** dan pasang Python 3 serta `psutil` pada semua node. Contoh setup Arch/Termux ada di bawah. Pada setiap worker, izinkan TCP `9998` serta UDP `9999` (perintah firewall di bawah).
 2. Jalankan `python worker.py` di setiap worker. Worker harus memakai versi terbaru agar master dapat memverifikasi protokolnya.
 3. Jalankan `python master.py` di master. Program langsung mencari worker, lalu meminta pilihan node pemroses, jumlah probe, dan timeout. Semua worker yang ditemukan otomatis dipantau.
 4. Tekan Enter untuk memakai semua node atau masukkan indeks/rentang seperti `0-3`. Jika discovery gagal, masukkan `add <IP>`; IP hanya akan diterima jika merespons protokol worker Tema 13 yang valid.
 
 Jika discovery gagal, masukkan IP worker dengan `add <IP>` pada prompt node. Master hanya menerima IP yang merespons protokol worker Tema 13.
+
+### Menyiapkan Python dan psutil (Arch Linux / Termux)
+
+Jalankan di direktori proyek pada setiap node. Virtual environment menghindari pemasangan paket ke Python sistem:
+
+```sh
+python -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+```
+
+Di Termux, jika Python belum terpasang, jalankan `pkg install python` terlebih dahulu. Aktifkan kembali `.venv` setiap membuka sesi terminal baru sebelum menjalankan `python worker.py` atau `python master.py`.
 
 ## Membuka port firewall pada worker
 
@@ -108,11 +122,13 @@ Gunakan profil `Private` untuk jaringan lab/rumah yang dipercaya. Jika jaringan 
 
 Alur normal tidak menampilkan menu skenario: program menjalankan sequential baseline, local parallel pada master, lalu distributed monitoring dengan pembagian dinamis. Untuk pengujian lengkap sesuai PDF (perbandingan statis/dinamis, simulasi fault tolerance, dan scalability 1/2/4/6/9 worker), jalankan `python master.py --evaluasi`. Pada scalability, master lokal ikut sebagai node pemroses; skenario worker yang belum tersedia dilewati. Untuk memenuhi pengujian fisik sesuai PDF diperlukan 1 master dan 9 worker.
 
-Hasil menampilkan waktu eksekusi, throughput, speedup dan efficiency bila ada baseline, jumlah node, status UP/DOWN, latency rata-rata/minimum/maksimum, packet loss, serta informasi CPU dan peak memory master yang tersedia pada platform. Worker mencetak progres target. Simulasi fault tolerance melaporkan waktu retry/recovery lokal. Catat juga penggunaan CPU/memori tiap node dari OS saat percobaan untuk analisis cluster; metrik lokal master saja bukan pengukuran agregat seluruh node.
+`LAPORAN_TEMPLATE.md` menyediakan kerangka BAB I–V dan tabel pengukuran. Isi dengan data eksperimen aktual; template tidak menggantikan analisis hasil.
+
+Hasil menampilkan waktu eksekusi, throughput, speedup dan efficiency bila ada baseline, status UP/DOWN, latency ICMP RTT, packet loss, serta CPU dan RAM rata-rata/puncak untuk proses dan child process pada setiap node yang mengerjakan task. Pengukuran utilization disampling selama task dan dinormalisasi terhadap total core/RAM perangkat. `psutil` diperlukan pada semua node agar metrik ini tersedia. Simulasi fault tolerance melaporkan waktu retry/recovery lokal. Analisis otomatis merangkum status, latency, packet loss, dan perubahan waktu terhadap baseline; BAB IV tetap perlu membahas hasil percobaan dan variasi antar-run.
 
 ## Interpretasi dan batasan
 
 - `UP` berarti satu atau lebih probe ICMP menerima balasan; `DOWN` berarti semua probe gagal/timeout. Ping yang diblokir firewall juga dapat tampak `DOWN`.
-- Worker discovery memakai UDP `9999`; informasi dan tugas dikirim melalui TCP `9998`. TCP sweep memindai subnet lokal yang terdeteksi untuk mencari worker.
+- Worker discovery memakai UDP `9999`; informasi dan tugas dikirim melalui TCP `9998`. Discovery hanya memindai satu subnet Wi-Fi/hotspot agar tidak membuang waktu pada interface lain.
 - Setiap worker memakai `ProcessPoolExecutor` untuk memproses target secara paralel. Static membagi daftar target merata; dynamic memberikan batch berikutnya ke node yang lebih dulu selesai.
 - Jika worker gagal, task-nya dimasukkan kembali dengan retry pada master lokal. Untuk laporan, dokumentasikan topologi, konfigurasi node/jaringan, hasil percobaan terkontrol, dan analisis tiap metrik. Video demonstrasi harus menunjukkan minimal 10 node fisik sesuai PDF.

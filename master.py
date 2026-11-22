@@ -8,16 +8,43 @@ import socket
 import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from process_metrics import measure_process_tree
 
 DISCOVERY_PORT = 9999
 TCP_PORT = 9998
 MAX_TARGETS = 4096
 WORKER_SERVICE = "tema13-network-monitor-worker-v1"
 
-try:
-    import resource
-except ImportError:  # resource is unavailable on Windows
-    resource = None
+def select_wifi_network(networks):
+    """Choose one Wi-Fi subnet for discovery instead of sweeping every interface."""
+    if len(networks) <= 1:
+        return networks
+
+    default_interface = None
+    try:
+        routes = subprocess.run(["ip", "-4", "route", "show", "default"],
+                                capture_output=True, text=True, timeout=2, check=False).stdout
+        for line in routes.splitlines():
+            match = re.search(r"\bdev\s+(\S+)", line)
+            if match:
+                default_interface = match.group(1)
+                break
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+    def is_wireless(interface):
+        name = interface.lower()
+        return (name.startswith(("wl", "wlan", "wifi", "ath", "ap", "swlan"))
+                or os.path.isdir(f"/sys/class/net/{interface}/wireless"))
+
+    wireless = [item for item in networks if is_wireless(item[2])]
+    if wireless:
+        return [next((item for item in wireless if item[2] == default_interface), wireless[0])]
+
+    # On systems where interface names do not reveal Wi-Fi, prefer the subnet
+    # associated with the default route (normally the connected Wi-Fi).
+    routed = [item for item in networks if item[2] == default_interface]
+    return routed[:1] or networks[:1]
 
 
 def local_subnets():
@@ -43,15 +70,17 @@ def local_subnets():
         pass
 
     if not networks:
-        addresses = set()
+        addresses = []
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
                 probe.connect(("192.0.2.1", 80))
-                addresses.add(probe.getsockname()[0])
+                addresses.append(probe.getsockname()[0])
         except OSError:
             pass
         try:
-            addresses.update(socket.gethostbyname_ex(socket.gethostname())[2])
+            for address in socket.gethostbyname_ex(socket.gethostname())[2]:
+                if address not in addresses:
+                    addresses.append(address)
         except OSError:
             pass
         for address in addresses:
@@ -62,7 +91,7 @@ def local_subnets():
                     networks.setdefault(str(net), (str(net), address, "detected"))
             except ipaddress.AddressValueError:
                 continue
-    return list(networks.values())
+    return select_wifi_network(list(networks.values()))
 
 
 def worker_info(ip):
@@ -191,7 +220,21 @@ def ask_integer(prompt, default, minimum, maximum):
     return default
 
 
-def print_results(rows, duration, errors=0, baseline=None, node_count=1):
+def print_node_metrics(label, metrics):
+    if not metrics:
+        return
+    cpu_avg = metrics.get("cpu_avg_pct")
+    cpu_peak = metrics.get("cpu_peak_pct")
+    memory_avg = metrics.get("memory_avg_pct")
+    memory_peak = metrics.get("memory_peak_pct")
+    if None in (cpu_avg, cpu_peak, memory_avg, memory_peak):
+        print(f"Utilisasi {label}: tidak tersedia ({metrics.get('measurement', 'psutil tidak tersedia')}).")
+        return
+    print(f"Utilisasi {label}: CPU rata-rata/puncak {cpu_avg:.1f}%/{cpu_peak:.1f}% dari total core; "
+          f"RAM rata-rata/puncak {memory_avg:.2f}%/{memory_peak:.2f}%.")
+
+
+def print_results(rows, duration, errors=0, baseline=None, node_count=1, node_metrics=None):
     rows.sort(key=lambda row: ipaddress.IPv4Address(row["ip"]))
     print("\nIP              STATUS       LATENCY avg/min/max         PACKET LOSS")
     print("-" * 78)
@@ -203,24 +246,45 @@ def print_results(rows, duration, errors=0, baseline=None, node_count=1):
         print(f"{row['ip']:<15} {row['status']:<12} {avg:<26} {row['packet_loss_pct']:.1f}% ({row['lost']}/{row['sent']})")
     failed = sum(bool(row.get("error")) for row in rows)
     up = sum(row.get("status") == "UP" for row in rows)
-    print(f"\nSelesai {duration:.2f}s — UP: {up}, DOWN: {len(rows)-up-failed}, error: {errors+failed}")
+    down = sum(row.get("status") == "DOWN" for row in rows)
+    print(f"\nSelesai {duration:.2f}s — UP: {up}, DOWN: {down}, error: {errors+failed}")
     print(f"Throughput: {len(rows) / duration:.2f} IP/detik" if duration else "Throughput: -")
-    cpu_seconds = max(0.0, time.process_time())
-    peak_memory = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss if resource else "tidak tersedia"
-    print(f"CPU master (kumulatif proses): {cpu_seconds:.2f}s | Peak memory master: {peak_memory} (platform unit)")
+    if node_metrics:
+        print_node_metrics("master", node_metrics)
+    measured = [row for row in rows if not row.get("error")]
+    latencies = [row["avg_ms"] for row in measured if row.get("avg_ms") is not None]
+    sent = sum(row.get("sent", 0) for row in measured)
+    lost = sum(row.get("lost", 0) for row in measured)
+    if measured:
+        mean_loss = lost * 100 / sent if sent else 0.0
+        mean_latency = sum(latencies) / len(latencies) if latencies else None
+        latency_text = f"{mean_latency:.2f} ms" if mean_latency is not None else "tidak ada probe berhasil"
+        print(f"Analisis: {up}/{len(rows)} target UP, latency rata-rata antar-target {latency_text}, "
+              f"packet loss agregat {mean_loss:.1f}%.")
     if baseline and duration:
         speedup = baseline / duration
         print(f"Speedup: {speedup:.2f}x | Efisiensi ({node_count} node): {speedup / node_count * 100:.1f}%")
+        if speedup > 1:
+            print(f"Analisis performa: waktu turun {(1 - duration / baseline) * 100:.1f}% dibanding baseline.")
+        elif speedup < 1:
+            print(f"Analisis performa: waktu naik {(duration / baseline - 1) * 100:.1f}% dibanding baseline.")
+        else:
+            print("Analisis performa: waktu sama dengan baseline.")
 
 
 def monitor_sequential(targets, count, timeout):
     from worker import monitor_one
-    rows = []
-    print(f"[jalan] Sequential: mulai memantau {len(targets)} target.", flush=True)
-    for index, ip in enumerate(targets, 1):
-        row = monitor_one((ip, count, timeout))
-        rows.append(row)
-        print(f"[progres] Sequential {index}/{len(targets)} — {ip} {row['status']}", flush=True)
+    def run_sequential():
+        rows = []
+        print(f"[jalan] Sequential: mulai memantau {len(targets)} target.", flush=True)
+        for index, ip in enumerate(targets, 1):
+            row = monitor_one((ip, count, timeout))
+            rows.append(row)
+            print(f"[progres] Sequential {index}/{len(targets)} — {ip} {row['status']}", flush=True)
+        return rows
+
+    rows, metrics = measure_process_tree(run_sequential)
+    print_node_metrics("master/sequential", metrics)
     return rows
 
 
@@ -314,9 +378,9 @@ def monitor_distributed(targets, workers, count, timeout, weighted=False, simula
                 future = pool.submit(monitor_local, chunk, count, timeout)
             else:
                 future = pool.submit(run_job, worker, chunk, count, timeout)
-            future_map[future] = (worker, chunk)
+            future_map[future] = (worker, chunk, time.monotonic())
         for future in as_completed(future_map):
-            worker, chunk = future_map[future]
+            worker, chunk, dispatched_at = future_map[future]
             try:
                 result = future.result()
             except Exception as exc:
@@ -330,6 +394,9 @@ def monitor_distributed(targets, workers, count, timeout, weighted=False, simula
                 except Exception as exc:
                     result = {"results": [{"ip": ip, "error": str(exc)} for ip in chunk]}
                 print(f"[pemulihan] Retry lokal selesai dalam {time.monotonic() - recovery_started:.2f}s.")
+            print_node_metrics(worker["host"] if worker else "master/retry", result.get("metrics"))
+            if worker is None:
+                print(f"[pemulihan] Task simulasi pulih di master dalam {time.monotonic() - dispatched_at:.2f}s.")
             print(f"[progres] {worker['host'] if worker else 'master retry'} selesai {len(result.get('results', []))}/{len(chunk)} target.", flush=True)
             rows.extend(result.get("results", []))
     return rows, time.monotonic() - start_time, failed_nodes
@@ -377,6 +444,7 @@ def monitor_dynamic(targets, workers, count, timeout):
                 except Exception as exc:
                     result = {"results": [{"ip": ip, "error": str(exc)} for ip in chunk]}
                 print(f"[pemulihan] Retry lokal selesai dalam {time.monotonic() - recovery_started:.2f}s.")
+            print_node_metrics(worker["host"], result.get("metrics"))
             done = len(result.get("results", []))
             print(f"[progres] {worker['host']}: batch selesai {done}/{len(chunk)} target.", flush=True)
             rows.extend(result.get("results", []))
@@ -410,7 +478,7 @@ def evaluation_main():
     except ValueError:
         print("Timeout tidak valid; memakai 1 detik.")
         timeout = 1.0
-    print("[+] Mencari worker aktif pada semua interface jaringan...")
+    print("[+] Mencari worker pada satu subnet Wi-Fi/hotspot...")
     local_ips = {address for _, address, _ in local_subnets()}
     remote_workers = [w for w in discover_workers()
                       if w["ip"] not in local_ips and w["ip"] != "127.0.0.1"]
@@ -446,7 +514,8 @@ def evaluation_main():
         started = time.monotonic()
         result = monitor_local(targets, count, timeout)
         elapsed = time.monotonic() - started
-        print_results(result["results"], elapsed, baseline=baseline, node_count=1)
+        print_results(result["results"], elapsed, baseline=baseline, node_count=1,
+                      node_metrics=result.get("metrics"))
     elif mode == "5":
         static_baseline = None
         for dynamic in (False, True):
@@ -462,11 +531,16 @@ def evaluation_main():
         print(f"Recovery selesai; node gagal/simulasi yang dicatat: {failed}")
     elif mode == "7":
         baseline = None
+        master_node = next((node for node in workers if node.get("local")), None)
+        remote_nodes = [node for node in workers if not node.get("local")]
+        if master_node is None:
+            master_node = {"host": socket.gethostname(), "ip": "127.0.0.1",
+                           "cores": os.cpu_count() or 1, "local": True}
         for remote_count in (1, 2, 4, 6, 9):
-            selected = [workers[0]] + [node for node in workers[1:] if not node.get("local")][:remote_count]
-            if len(selected) == 1:
-                print(f"[!] Lewati skenario {remote_count} worker: worker jaringan tidak tersedia.")
+            if len(remote_nodes) < remote_count:
+                print(f"[!] Lewati skenario {remote_count} worker: hanya {len(remote_nodes)} worker tersedia/terpilih.")
                 continue
+            selected = [master_node] + remote_nodes[:remote_count]
             print(f"\n[+] Skalabilitas: {len(selected)-1} worker + master (target {remote_count} worker)")
             rows, elapsed, failed = monitor_distributed(targets, selected, count, timeout)
             print_results(rows, elapsed, failed, baseline=baseline, node_count=len(selected))
@@ -533,7 +607,8 @@ def main():
     started = time.monotonic()
     local_result = monitor_local(targets, count, timeout)
     local_duration = time.monotonic() - started
-    print_results(local_result["results"], local_duration, baseline=baseline, node_count=1)
+    print_results(local_result["results"], local_duration, baseline=baseline, node_count=1,
+                  node_metrics=local_result.get("metrics"))
 
     print("\n[+] Menjalankan pemantauan distributed dengan pembagian dinamis...")
     rows, duration, failed = monitor_distributed(targets, selected, count, timeout, dynamic=True)
@@ -542,7 +617,8 @@ def main():
 
 def monitor_local(targets, count, timeout):
     from worker import monitor_targets
-    return {"results": monitor_targets(targets, count, timeout)}
+    results, metrics = monitor_targets(targets, count, timeout)
+    return {"results": results, "metrics": metrics}
 
 
 if __name__ == "__main__":

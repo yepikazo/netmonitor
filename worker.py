@@ -6,15 +6,18 @@ import ipaddress
 import json
 import os
 import platform
+import re
 import socket
 import subprocess
 import threading
 import time
+from process_metrics import measure_process_tree
 
 DISCOVERY_PORT = 9999
 TCP_PORT = 9998
 MAX_TARGETS = 4096
 WORKER_SERVICE = "tema13-network-monitor-worker-v1"
+TASK_LOCK = threading.Lock()
 
 
 def ping_once(ip, timeout):
@@ -26,11 +29,16 @@ def ping_once(ip, timeout):
         # Linux and macOS use different timeout flags; both accept -c 1.
         command = (["ping", "-n", "-c", "1", "-W", str(max(1, int(timeout)) if system == "linux" else max(1, int(timeout * 1000))), ip]
                    if system == "linux" else ["ping", "-n", "-c", "1", "-W", str(max(1, int(timeout))), ip])
-    started = time.perf_counter()
     try:
-        proc = subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        proc = subprocess.run(command, capture_output=True, text=True,
                               timeout=timeout + 1, check=False)
-        return (time.perf_counter() - started) * 1000 if proc.returncode == 0 else None
+        if proc.returncode != 0:
+            return None
+        match = re.search(r"time\s*[=<]\s*(\d+(?:\.\d+)?)\s*ms", proc.stdout, re.IGNORECASE)
+        if match:
+            latency = float(match.group(1))
+            return latency / 2 if "<" in match.group(0) else latency
+        return None
     except (OSError, subprocess.TimeoutExpired):
         return None
 
@@ -54,7 +62,7 @@ def monitor_one(args):
     }
 
 
-def monitor_targets(targets, count, timeout):
+def _monitor_targets(targets, count, timeout):
     if not isinstance(targets, list) or len(targets) > MAX_TARGETS:
         raise ValueError(f"targets harus berupa daftar maksimal {MAX_TARGETS} IP")
     if (not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= 20
@@ -83,6 +91,10 @@ def monitor_targets(targets, count, timeout):
     return results
 
 
+def monitor_targets(targets, count, timeout):
+    return measure_process_tree(_monitor_targets, targets, count, timeout)
+
+
 def send_line(conn, value):
     conn.sendall(json.dumps(value).encode() + b"\n")
 
@@ -107,8 +119,9 @@ def handle_client(conn, addr):
             timeout = request.get("timeout", 1.0)
             conn.settimeout(None)
             print(f"[+] {addr[0]} meminta monitoring {len(targets) if isinstance(targets, list) else '?'} target", flush=True)
-            results = monitor_targets(targets, count, timeout)
-            send_line(conn, {"host": socket.gethostname(), "results": results})
+            with TASK_LOCK:
+                results, metrics = monitor_targets(targets, count, timeout)
+            send_line(conn, {"host": socket.gethostname(), "results": results, "metrics": metrics})
             print(f"[✓] Selesai memantau {len(results)} target untuk {addr[0]}", flush=True)
         except Exception as exc:
             try:
