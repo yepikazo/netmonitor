@@ -13,6 +13,8 @@ Panduan terpisah tersedia: [setup Windows/Linux](PANDUAN_SETUP.md) dan [alur pen
 
 Jika discovery gagal, masukkan IP worker dengan `add <IP>` pada prompt node. Master hanya menerima IP yang merespons protokol worker Tema 13.
 
+Ketika master mulai berjalan dan mengirim discovery, terminal worker menampilkan notifikasi berisi IP master. Notifikasi yang sama dibatasi satu kali per 5 detik.
+
 ### Menyiapkan Python dan psutil (Arch Linux / Termux)
 
 Jalankan di direktori proyek pada setiap node. Virtual environment menghindari pemasangan paket ke Python sistem:

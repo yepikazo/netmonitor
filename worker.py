@@ -18,6 +18,7 @@ TCP_PORT = 9998
 MAX_TARGETS = 4096
 WORKER_SERVICE = "tema13-network-monitor-worker-v1"
 TASK_LOCK = threading.Lock()
+DISCOVERY_NOTICE_INTERVAL = 5
 
 
 def ping_once(ip, timeout):
@@ -132,6 +133,7 @@ def handle_client(conn, addr):
 
 
 def udp_discovery_responder():
+    last_notice = {}
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind(("", DISCOVERY_PORT))
@@ -142,6 +144,12 @@ def udp_discovery_responder():
                     info = {"service": WORKER_SERVICE, "host": socket.gethostname(),
                             "cores": os.cpu_count() or 1, "port": TCP_PORT}
                     sock.sendto(json.dumps(info).encode(), addr)
+                    now = time.monotonic()
+                    if now - last_notice.get(addr[0], 0) >= DISCOVERY_NOTICE_INTERVAL:
+                        last_notice[addr[0]] = now
+                        timestamp = time.strftime("%H:%M:%S")
+                        print(f"\n[notifikasi {timestamp}] Master {addr[0]} sedang menjalankan master.py dan mencari worker.",
+                              flush=True)
             except OSError:
                 continue
 
