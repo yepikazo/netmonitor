@@ -169,6 +169,8 @@ source .venv/bin/activate
 python master.py
 ```
 
+Setiap eksekusi master membuat catatan hasil pada direktori `hasil/`. Nama awalnya `hasil_monitoring.txt`; jika sudah ada, master membuat `1_hasil_monitoring.txt`, lalu `2_hasil_monitoring.txt`, dan seterusnya. Direktori dibuat otomatis dan diabaikan oleh Git.
+
 ## Android Termux sebagai worker
 
 Termux tidak memakai UFW. Pasang Python dan siapkan dependensi:

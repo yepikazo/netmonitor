@@ -120,16 +120,21 @@ def handle_client(conn, addr):
             timeout = request.get("timeout", 1.0)
             conn.settimeout(None)
             print(f"[+] {addr[0]} meminta monitoring {len(targets) if isinstance(targets, list) else '?'} target", flush=True)
+            task_started = time.monotonic()
             with TASK_LOCK:
                 results, metrics = monitor_targets(targets, count, timeout)
             send_line(conn, {"host": socket.gethostname(), "results": results, "metrics": metrics})
-            print(f"[✓] Selesai memantau {len(results)} target untuk {addr[0]}", flush=True)
+            elapsed = time.monotonic() - task_started
+            timestamp = time.strftime("%H:%M:%S")
+            print(f"\n[NOTIFIKASI {timestamp}] Task dari master {addr[0]} selesai: "
+                  f"{len(results)} target dalam {elapsed:.2f}s.", flush=True)
         except Exception as exc:
             try:
                 send_line(conn, {"error": str(exc)})
             except OSError:
                 pass
-            print(f"[-] Permintaan dari {addr[0]} gagal: {exc}")
+            timestamp = time.strftime("%H:%M:%S")
+            print(f"\n[NOTIFIKASI {timestamp}] Task dari master {addr[0]} gagal: {exc}", flush=True)
 
 
 def udp_discovery_responder():

@@ -114,6 +114,8 @@ Untuk tiap konfigurasi catat execution time, speedup, efficiency, throughput, CP
 
 Isi tabel hasil pada [LAPORAN_TEMPLATE.md](LAPORAN_TEMPLATE.md) dengan data aktual. Sertakan tangkapan layar/log yang menunjukkan node dan hasil pengujian.
 
+Master juga menulis konfigurasi run, hasil per target, metrik CPU/RAM, analisis, dan recovery time ke `hasil/hasil_monitoring.txt`. Jika sudah ada, nama berikutnya diberi nomor di depan, misalnya `hasil/1_hasil_monitoring.txt`. Salin hasil dari file tersebut ke tabel BAB IV.
+
 ## D. Alur demonstrasi video (maksimal 5 menit)
 
 1. Tampilkan topologi: satu master dan sembilan worker fisik yang terhubung.

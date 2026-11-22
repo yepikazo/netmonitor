@@ -15,6 +15,8 @@ Jika discovery gagal, masukkan IP worker dengan `add <IP>` pada prompt node. Mas
 
 Ketika master mulai berjalan dan mengirim discovery, terminal worker menampilkan notifikasi berisi IP master. Notifikasi yang sama dibatasi satu kali per 5 detik.
 
+Setelah setiap task/batch selesai, terminal worker juga menampilkan notifikasi sukses berisi IP master, jumlah target, dan durasi. Jika task gagal, worker menampilkan notifikasi kegagalan beserta alasannya.
+
 ### Menyiapkan Python dan psutil (Arch Linux / Termux)
 
 Jalankan di direktori proyek pada setiap node. Virtual environment menghindari pemasangan paket ke Python sistem:
@@ -127,6 +129,8 @@ Alur normal tidak menampilkan menu skenario: program menjalankan sequential base
 `LAPORAN_TEMPLATE.md` menyediakan kerangka BAB I–V dan tabel pengukuran. Isi dengan data eksperimen aktual; template tidak menggantikan analisis hasil.
 
 Hasil menampilkan waktu eksekusi, throughput, speedup dan efficiency bila ada baseline, status UP/DOWN, latency ICMP RTT, packet loss, serta CPU dan RAM rata-rata/puncak untuk proses dan child process pada setiap node yang mengerjakan task. Pengukuran utilization disampling selama task dan dinormalisasi terhadap total core/RAM perangkat. `psutil` diperlukan pada semua node agar metrik ini tersedia. Simulasi fault tolerance melaporkan waktu retry/recovery lokal. Analisis otomatis merangkum status, latency, packet loss, dan perubahan waktu terhadap baseline; BAB IV tetap perlu membahas hasil percobaan dan variasi antar-run.
+
+Master menyimpan hasil pengujian ke direktori `hasil/` dalam file `hasil_monitoring.txt`. Jika nama itu sudah digunakan, file berikutnya memakai awalan nomor, seperti `1_hasil_monitoring.txt`.
 
 ## Interpretasi dan batasan
 

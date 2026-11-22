@@ -3,6 +3,8 @@
 import ipaddress
 import json
 import os
+from datetime import datetime
+from pathlib import Path
 import re
 import socket
 import subprocess
@@ -14,6 +16,57 @@ DISCOVERY_PORT = 9999
 TCP_PORT = 9998
 MAX_TARGETS = 4096
 WORKER_SERVICE = "tema13-network-monitor-worker-v1"
+RESULTS_FILE = None
+
+
+def initialize_results_file():
+    global RESULTS_FILE
+    results_dir = Path(__file__).resolve().parent / "hasil"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    index = 0
+    while True:
+        prefix = f"{index}_" if index else ""
+        candidate = results_dir / f"{prefix}hasil_monitoring.txt"
+        try:
+            with candidate.open("x", encoding="utf-8") as stream:
+                stream.write("Distributed Network Monitoring — Tema 13\n")
+                stream.write(f"Waktu mulai: {datetime.now().astimezone().isoformat(timespec='seconds')}\n")
+                stream.write("Target monitoring: IP worker Tema 13 yang terdeteksi\n")
+                stream.write("=" * 78 + "\n")
+            RESULTS_FILE = candidate
+            return candidate
+        except FileExistsError:
+            index += 1
+
+
+def append_result_text(text):
+    if RESULTS_FILE is not None:
+        with RESULTS_FILE.open("a", encoding="utf-8") as stream:
+            stream.write(text.rstrip() + "\n")
+
+
+def save_result_section(label, rows, duration, summary=()):
+    lines = [f"\n## {label}", f"Execution time: {duration:.3f} s", "IP | STATUS | RTT avg/min/max (ms) | packet loss | received/sent"]
+    for row in rows:
+        if row.get("error"):
+            lines.append(f"{row.get('ip', '-')} | ERROR | - | - | {row.get('error')}")
+        else:
+            latency = "-" if row.get("avg_ms") is None else (
+                f"{row['avg_ms']:.3f}/{row['min_ms']:.3f}/{row['max_ms']:.3f}")
+            lines.append(f"{row['ip']} | {row['status']} | {latency} | "
+                         f"{row['packet_loss_pct']:.2f}% | {row['received']}/{row['sent']}")
+    lines.extend(summary)
+    append_result_text("\n".join(lines))
+
+
+def save_run_setup(targets, count, timeout, all_workers, selected_workers):
+    lines = ["\n## Konfigurasi run", f"Probe per IP: {count}", f"Timeout probe: {timeout}s",
+             "Target IP: " + (", ".join(targets) if targets else "tidak ada")]
+    lines.append("Worker ditemukan: " + (", ".join(
+        f"{node['host']} ({node['ip']})" for node in all_workers if not node.get("local")) or "tidak ada"))
+    lines.append("Node pemroses terpilih: " + (", ".join(
+        f"{node['host']} ({node['ip']})" for node in selected_workers) or "tidak ada"))
+    append_result_text("\n".join(lines))
 
 def select_wifi_network(networks):
     """Choose one Wi-Fi subnet for discovery instead of sweeping every interface."""
@@ -228,13 +281,17 @@ def print_node_metrics(label, metrics):
     memory_avg = metrics.get("memory_avg_pct")
     memory_peak = metrics.get("memory_peak_pct")
     if None in (cpu_avg, cpu_peak, memory_avg, memory_peak):
-        print(f"Utilisasi {label}: tidak tersedia ({metrics.get('measurement', 'psutil tidak tersedia')}).")
+        message = f"Utilisasi {label}: tidak tersedia ({metrics.get('measurement', 'psutil tidak tersedia')})."
+        print(message)
+        append_result_text(message)
         return
-    print(f"Utilisasi {label}: CPU rata-rata/puncak {cpu_avg:.1f}%/{cpu_peak:.1f}% dari total core; "
-          f"RAM rata-rata/puncak {memory_avg:.2f}%/{memory_peak:.2f}%.")
+    message = (f"Utilisasi {label}: CPU rata-rata/puncak {cpu_avg:.1f}%/{cpu_peak:.1f}% dari total core; "
+               f"RAM rata-rata/puncak {memory_avg:.2f}%/{memory_peak:.2f}%.")
+    print(message)
+    append_result_text(message)
 
 
-def print_results(rows, duration, errors=0, baseline=None, node_count=1, node_metrics=None):
+def print_results(rows, duration, errors=0, baseline=None, node_count=1, node_metrics=None, label="Hasil"):
     rows.sort(key=lambda row: ipaddress.IPv4Address(row["ip"]))
     print("\nIP              STATUS       LATENCY avg/min/max         PACKET LOSS")
     print("-" * 78)
@@ -270,6 +327,17 @@ def print_results(rows, duration, errors=0, baseline=None, node_count=1, node_me
             print(f"Analisis performa: waktu naik {(duration / baseline - 1) * 100:.1f}% dibanding baseline.")
         else:
             print("Analisis performa: waktu sama dengan baseline.")
+
+    summary = [f"Throughput: {len(rows) / duration:.3f} IP/s" if duration else "Throughput: -",
+               f"UP: {up}; DOWN: {down}; error: {errors + failed}"]
+    if measured:
+        summary.append(f"Packet loss agregat: {mean_loss:.2f}%")
+        summary.append(f"Latency rata-rata antar-target: {latency_text}")
+    if baseline and duration:
+        summary.append(f"Speedup: {speedup:.3f}x; efficiency: {speedup / node_count * 100:.2f}% ({node_count} node)")
+    if errors + failed:
+        summary.append(f"Worker/task gagal atau direqueue: {errors + failed}")
+    save_result_section(label, rows, duration, summary)
 
 
 def monitor_sequential(targets, count, timeout):
@@ -393,10 +461,14 @@ def monitor_distributed(targets, workers, count, timeout, weighted=False, simula
                     result = monitor_local(chunk, count, timeout)
                 except Exception as exc:
                     result = {"results": [{"ip": ip, "error": str(exc)} for ip in chunk]}
-                print(f"[pemulihan] Retry lokal selesai dalam {time.monotonic() - recovery_started:.2f}s.")
+                recovery_message = f"[pemulihan] Retry lokal selesai dalam {time.monotonic() - recovery_started:.2f}s."
+                print(recovery_message)
+                append_result_text(recovery_message)
             print_node_metrics(worker["host"] if worker else "master/retry", result.get("metrics"))
             if worker is None:
-                print(f"[pemulihan] Task simulasi pulih di master dalam {time.monotonic() - dispatched_at:.2f}s.")
+                recovery_message = f"[pemulihan] Task simulasi pulih di master dalam {time.monotonic() - dispatched_at:.2f}s."
+                print(recovery_message)
+                append_result_text(recovery_message)
             print(f"[progres] {worker['host'] if worker else 'master retry'} selesai {len(result.get('results', []))}/{len(chunk)} target.", flush=True)
             rows.extend(result.get("results", []))
     return rows, time.monotonic() - start_time, failed_nodes
@@ -443,7 +515,9 @@ def monitor_dynamic(targets, workers, count, timeout):
                     result = monitor_local(chunk, count, timeout)
                 except Exception as exc:
                     result = {"results": [{"ip": ip, "error": str(exc)} for ip in chunk]}
-                print(f"[pemulihan] Retry lokal selesai dalam {time.monotonic() - recovery_started:.2f}s.")
+                recovery_message = f"[pemulihan] Retry lokal selesai dalam {time.monotonic() - recovery_started:.2f}s."
+                print(recovery_message)
+                append_result_text(recovery_message)
             print_node_metrics(worker["host"], result.get("metrics"))
             done = len(result.get("results", []))
             print(f"[progres] {worker['host']}: batch selesai {done}/{len(chunk)} target.", flush=True)
@@ -484,19 +558,28 @@ def evaluation_main():
                       if w["ip"] not in local_ips and w["ip"] != "127.0.0.1"]
     if not remote_workers:
         print("[-] Tidak menemukan worker jaringan; hanya pengujian sequential/local yang dapat dijalankan.")
-    targets = sorted({worker["ip"] for worker in remote_workers}, key=ipaddress.IPv4Address)
-    print(f"[+] Target monitoring otomatis: semua {len(targets)} worker yang terdeteksi.")
     print("[+] Worker ditemukan:")
     for worker in remote_workers:
         print(f"    - {worker['host']} ({worker['ip']}) — {worker['cores']} core")
     print(f"[+] Target monitoring: {len(targets)} alamat IPv4 eksplisit")
 
-    workers = [{"host": socket.gethostname(), "ip": "127.0.0.1", "cores": os.cpu_count() or 1, "local": True}]
-    workers.extend(remote_workers)
+    all_workers = [{"host": socket.gethostname(), "ip": "127.0.0.1", "cores": os.cpu_count() or 1, "local": True}]
+    all_workers.extend(remote_workers)
+    workers = all_workers
     print(f"[+] Node pemroses tersedia: {len(workers)} (master lokal + worker jaringan)")
 
     if mode in {"1", "4", "5", "6", "7"}:
         workers = choose_workers(workers)
+    targets = sorted({worker["ip"] for worker in all_workers if not worker.get("local")},
+                     key=ipaddress.IPv4Address)
+    print(f"[+] Target monitoring otomatis: semua {len(targets)} worker yang terdeteksi.")
+    if mode == "3":
+        selected_for_run = workers[:1]
+    elif mode in {"1", "4", "5", "6", "7"}:
+        selected_for_run = workers
+    else:
+        selected_for_run = []
+    save_run_setup(targets, count, timeout, all_workers, selected_for_run)
     if mode == "7":
         remote_count = sum(not worker.get("local") for worker in workers)
         if remote_count < 9:
@@ -505,29 +588,31 @@ def evaluation_main():
     if mode == "2":
         started = time.monotonic()
         rows = monitor_sequential(targets, count, timeout)
-        print_results(rows, time.monotonic() - started)
+        print_results(rows, time.monotonic() - started, label="Sequential")
     elif mode == "3":
         baseline_start = time.monotonic()
-        monitor_sequential(targets, count, timeout)
+        baseline_rows = monitor_sequential(targets, count, timeout)
         baseline = time.monotonic() - baseline_start
+        save_result_section("Sequential baseline", baseline_rows, baseline)
         print(f"Baseline sequential: {baseline:.2f}s")
         started = time.monotonic()
         result = monitor_local(targets, count, timeout)
         elapsed = time.monotonic() - started
         print_results(result["results"], elapsed, baseline=baseline, node_count=1,
-                      node_metrics=result.get("metrics"))
+                      node_metrics=result.get("metrics"), label="Local parallel")
     elif mode == "5":
         static_baseline = None
         for dynamic in (False, True):
             label = "dinamis, batch dikirim ke node yang selesai lebih dulu" if dynamic else "statis, pembagian rata di awal"
             print(f"\n[+] Distribusi {label}")
             rows, elapsed, failed = monitor_distributed(targets, workers, count, timeout, dynamic=dynamic)
-            print_results(rows, elapsed, failed, baseline=static_baseline, node_count=len(workers))
+            print_results(rows, elapsed, failed, baseline=static_baseline, node_count=len(workers),
+                          label="Dynamic balancing" if dynamic else "Static balancing")
             if not dynamic:
                 static_baseline = elapsed
     elif mode == "6":
         rows, elapsed, failed = monitor_distributed(targets, workers, count, timeout, simulate_failure=True)
-        print_results(rows, elapsed, failed)
+        print_results(rows, elapsed, failed, label="Fault tolerance")
         print(f"Recovery selesai; node gagal/simulasi yang dicatat: {failed}")
     elif mode == "7":
         baseline = None
@@ -543,7 +628,8 @@ def evaluation_main():
             selected = [master_node] + remote_nodes[:remote_count]
             print(f"\n[+] Skalabilitas: {len(selected)-1} worker + master (target {remote_count} worker)")
             rows, elapsed, failed = monitor_distributed(targets, selected, count, timeout)
-            print_results(rows, elapsed, failed, baseline=baseline, node_count=len(selected))
+            print_results(rows, elapsed, failed, baseline=baseline, node_count=len(selected),
+                          label=f"Scalability {remote_count} worker")
             if baseline is None:
                 baseline = elapsed
     else:
@@ -553,11 +639,13 @@ def evaluation_main():
             requested = ask_integer(f"Jumlah node yang dipakai (1-{len(workers)})", len(workers), 1, len(workers))
             workers = select_workers(workers, requested)
             baseline_start = time.monotonic()
-            monitor_sequential(targets, count, timeout)
+            baseline_rows = monitor_sequential(targets, count, timeout)
             baseline = time.monotonic() - baseline_start
+            save_result_section("Sequential baseline", baseline_rows, baseline)
             print(f"Baseline sequential: {baseline:.2f}s")
         rows, elapsed, failed = monitor_distributed(targets, workers, count, timeout)
-        print_results(rows, elapsed, failed, baseline=baseline, node_count=len(workers))
+        print_results(rows, elapsed, failed, baseline=baseline, node_count=len(workers),
+                      label="Distributed processing")
 
 
 def main():
@@ -596,11 +684,13 @@ def main():
         print("Timeout tidak valid; memakai 1 detik.")
         timeout = 1.0
 
+    save_run_setup(targets, count, timeout, workers, selected)
     print(f"\n[+] {len(targets)} target, {len(selected)} node pemroses.")
     print("[+] Menjalankan baseline sequential...")
     started = time.monotonic()
-    monitor_sequential(targets, count, timeout)
+    baseline_rows = monitor_sequential(targets, count, timeout)
     baseline = time.monotonic() - started
+    save_result_section("Sequential baseline", baseline_rows, baseline)
     print(f"[hasil] Sequential: {baseline:.2f}s")
 
     print("\n[+] Menjalankan local parallel pada master...")
@@ -608,11 +698,12 @@ def main():
     local_result = monitor_local(targets, count, timeout)
     local_duration = time.monotonic() - started
     print_results(local_result["results"], local_duration, baseline=baseline, node_count=1,
-                  node_metrics=local_result.get("metrics"))
+                  node_metrics=local_result.get("metrics"), label="Local parallel")
 
     print("\n[+] Menjalankan pemantauan distributed dengan pembagian dinamis...")
     rows, duration, failed = monitor_distributed(targets, selected, count, timeout, dynamic=True)
-    print_results(rows, duration, failed, baseline=baseline, node_count=len(selected))
+    print_results(rows, duration, failed, baseline=baseline, node_count=len(selected),
+                  label="Distributed dynamic")
 
 
 def monitor_local(targets, count, timeout):
@@ -623,7 +714,11 @@ def monitor_local(targets, count, timeout):
 
 if __name__ == "__main__":
     import sys
-    if len(sys.argv) == 2 and sys.argv[1] == "--evaluasi":
-        evaluation_main()
-    else:
-        main()
+    results_path = initialize_results_file()
+    try:
+        if len(sys.argv) == 2 and sys.argv[1] == "--evaluasi":
+            evaluation_main()
+        else:
+            main()
+    finally:
+        print(f"[hasil] Catatan hasil tersimpan di: {results_path}")
