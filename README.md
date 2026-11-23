@@ -8,7 +8,7 @@ Panduan terpisah tersedia: [setup Windows/Linux](PANDUAN_SETUP.md), [alur penget
 
 1. Hubungkan master dan semua worker ke **Wi-Fi/hotspot yang sama** dan pasang Python 3 serta `psutil` pada semua node. Contoh setup Arch/Termux ada di bawah. Pada setiap worker, izinkan TCP `9998` serta UDP `9999` (perintah firewall di bawah).
 2. Jalankan `python worker.py` di setiap worker. Worker harus memakai versi terbaru agar master dapat memverifikasi protokolnya.
-3. Jalankan `python master.py` di master untuk satu benchmark, atau `python master.py --10` untuk mengulang benchmark 10 kali. Program mencari worker, lalu meminta pilihan node pemroses, jumlah probe, dan timeout satu kali. Semua worker yang ditemukan otomatis dipantau.
+3. Jalankan `python master.py` di master untuk satu suite pengujian lengkap, atau `python master.py --10` untuk mengulang suite 10 kali. Program mencari worker, lalu meminta pilihan node pemroses, jumlah probe, dan timeout satu kali. Semua worker yang ditemukan otomatis dipantau.
 4. Tekan Enter untuk memakai semua node atau masukkan indeks/rentang seperti `0-3`. Jika discovery gagal, masukkan `add <IP>`; IP hanya akan diterima jika merespons protokol worker Tema 13 yang valid.
 
 Jika discovery gagal, masukkan IP worker dengan `add <IP>` pada prompt node. Master hanya menerima IP yang merespons protokol worker Tema 13.
@@ -35,7 +35,7 @@ Di Termux, jika Python belum terpasang, jalankan `pkg install python` terlebih d
 2. **Master memilih jaringan Wi-Fi.** Master memilih satu subnet Wi-Fi yang terdeteksi, mengirim UDP broadcast, lalu memakai TCP sweep pada subnet yang sama sebagai fallback. Hanya host yang menjawab protokol worker Tema 13 yang didaftarkan.
 3. **Target dibuat otomatis.** Semua IP worker yang ditemukan menjadi target monitoring. Pilihan node pemroses terpisah dari target: operator dapat memilih node yang menjalankan komputasi, tetapi semua IP worker yang ditemukan tetap dipantau.
 4. **Setiap target diprobe.** Worker menjalankan ping ICMP sebanyak jumlah probe yang dipilih. Hasil per IP memuat status UP/DOWN, RTT, dan packet loss. RTT dibaca dari keluaran `ping`; nilai `time<1ms` dicatat sebagai estimasi setengah batas tersebut.
-5. **Task diproses dan hasil digabung.** Master membagi daftar target ke node pemroses. Tiap node menjalankan target secara multiprocessing dengan `ProcessPoolExecutor`, kemudian mengirim hasil kembali melalui TCP. Pada mode dinamis, node yang lebih dulu selesai menerima batch berikutnya.
+5. **Task diproses dan hasil digabung.** Master membagi daftar target ke node pemroses. Tiap node menjalankan target secara multiprocessing dengan `ProcessPoolExecutor`, kemudian mengirim hasil kembali melalui TCP. Untuk perbandingan load balancing, probe dipecah menjadi beberapa task independen per IP agar antrean lebih besar daripada jumlah node; mode dinamis memberi batch berikutnya ke node yang lebih dulu selesai.
 6. **Metrik dan hasil disimpan.** Program mengukur waktu, throughput, speedup/efficiency jika ada baseline, recovery time, serta sampel CPU/RAM proses dan child process menggunakan `psutil`. Master menulis konfigurasi, hasil per target, metrik, dan analisis ke `hasil/hasil_monitoring.txt`; jika nama sudah ada, master menambahkan nomor di depan nama file.
 
 ## Membuka port firewall pada worker
@@ -133,7 +133,7 @@ Gunakan profil `Private` untuk jaringan lab/rumah yang dipercaya. Jika jaringan 
 
 ## Alur normal dan evaluasi
 
-Alur normal tidak menampilkan menu skenario. `python master.py` menjalankan sequential baseline, local parallel, dan distributed dinamis satu kali; `python master.py --10` menjalankan ketiganya 10 kali dengan konfigurasi yang sama. Untuk satu skenario khusus atau pengujian evaluasi lain (static/dynamic, fault tolerance, scalability 1/2/4/6/9 worker), jalankan `python master.py --evaluasi`. Pada scalability, master lokal ikut sebagai node pemroses; setiap skenario yang jumlah worker-nya tidak tersedia dilewati. Untuk memenuhi pengujian fisik sesuai PDF diperlukan 1 master dan 9 worker.
+Alur normal tidak menampilkan menu skenario. `python master.py` menjalankan suite pengujian PDF satu kali: sequential, local parallel, distributed statis, perbandingan static/dynamic, fault tolerance, dan scalability 1/2/4/6/9 worker. `python master.py --10` menjalankan seluruh suite tersebut 10 kali dengan konfigurasi yang sama. Untuk menjalankan satu skenario secara terpisah, gunakan `python master.py --evaluasi`. Pada scalability, master lokal ikut sebagai node pemroses; setiap skenario yang jumlah worker-nya tidak tersedia dilewati. Untuk menjalankan seluruh variasi dibutuhkan 1 master dan 9 worker jaringan.
 
 `LAPORAN_TEMPLATE.md` menyediakan kerangka BAB I–V dan tabel pengukuran. Isi dengan data eksperimen aktual; template tidak menggantikan analisis hasil.
 

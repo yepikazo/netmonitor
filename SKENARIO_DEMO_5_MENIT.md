@@ -18,7 +18,7 @@ PDF mensyaratkan video MP4 berdurasi maksimal 5 menit sebagai bukti sistem berja
 |---|---|---|
 | 0:00–0:25 | Judul proyek dan tampilan topologi/perangkat | “Ini Distributed Network Monitoring Tema 13 dengan arsitektur satu master dan sembilan worker.” Sebutkan bahwa semua perangkat terhubung pada jaringan yang sama. |
 | 0:25–1:05 | Tampilkan worker berjalan; pan kamera atau tampilkan konsol worker secara singkat | Tunjukkan sembilan perangkat fisik. Sorot beberapa banner worker yang menampilkan hostname dan protokol `tema13-network-monitor-worker-v1`. Katakan bahwa seluruh worker sudah aktif. |
-| 1:05–1:35 | Terminal master | Jalankan `python master.py`. Tekan Enter untuk semua node, lalu masukkan `1` untuk jumlah probe dan `1` untuk timeout jika diminta. Tunjukkan master menemukan worker dan menjadikan seluruh IP worker terdeteksi sebagai target. |
+| 1:05–1:35 | Terminal master | Jalankan `python master.py --evaluasi`, pilih mode `1`, lalu tekan Enter untuk semua node. Masukkan `1` untuk jumlah probe dan `1` untuk timeout jika diminta. Tunjukkan master menemukan worker dan menjadikan seluruh IP worker terdeteksi sebagai target. |
 | 1:35–3:45 | Hasil proses master dan aktivitas worker | Biarkan baseline sequential, local parallel, dan distributed dinamis selesai. Tunjukkan status UP/DOWN, RTT, packet loss, waktu, speedup/efficiency, throughput, serta CPU/RAM. Pada layar worker, sorot notifikasi saat menerima dan menyelesaikan task. |
 | 3:45–4:25 | File hasil | Buka file yang dilaporkan master, biasanya `hasil/hasil_monitoring.txt`. Tunjukkan hasil per IP, ringkasan metrik, analisis, dan konfigurasi run tersimpan. |
 | 4:25–4:55 | Penutup/topologi kembali | Ringkas bahwa task dibagi ke node, diproses paralel/terdistribusi, dan hasil dikumpulkan kembali. Akhiri sebelum 5 menit. |
@@ -41,23 +41,27 @@ Pada setiap worker Windows PowerShell:
 python worker.py
 ```
 
-Untuk demo singkat, gunakan `python master.py` agar satu siklus benchmark dijalankan. Jangan gunakan `--10` untuk demo karena 10 pengulangan dapat melebihi batas video 5 menit.
+Suite lengkap `python master.py` menguji semua skenario dan dapat melebihi batas video 5 menit. Untuk video, gunakan `python master.py --evaluasi` lalu pilih mode `1` agar hanya satu run monitoring didistribusikan.
 
 Di master Linux:
 
 ```sh
 source .venv/bin/activate
-python master.py
+python master.py --evaluasi
 ```
+
+Pilih mode `1` pada menu.
 
 Di master Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python master.py
+python master.py --evaluasi
 ```
 
-Alur `python master.py` menjalankan satu siklus benchmark. Pengujian statis-vs-dinamis, fault tolerance, serta variasi scalability 1/2/4/6/9 worker dapat direkam atau dilaporkan terpisah melalui `python master.py --evaluasi`.
+Pilih mode `1` pada menu.
+
+Mode `python master.py --evaluasi` pilihan `1` menjalankan satu pemantauan terdistribusi. Pengujian statis-vs-dinamis, fault tolerance, dan variasi scalability tercakup dalam suite `python master.py` atau dapat dipilih terpisah melalui menu evaluasi.
 
 ## Checklist sebelum mengumpulkan
 

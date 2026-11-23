@@ -8,11 +8,11 @@ Jalankan `worker.py` pada setiap worker dan biarkan prosesnya aktif. Jalankan `m
 
 ### Bagaimana menjalankan semua skenario pengujian?
 
-Jalankan `python master.py --evaluasi` pada master, lalu pilih skenario dari menu. `python master.py` menjalankan baseline sequential, local parallel, dan distributed dinamis satu kali; `python master.py --10` menjalankan ketiganya 10 kali.
+`python master.py` menjalankan semua pengujian utama PDF satu kali tanpa menu: sequential, local parallel, distributed statis, perbandingan static/dynamic, fault tolerance, dan scalability 1/2/4/6/9 worker. `python master.py --10` menjalankan seluruh suite tersebut 10 kali. Gunakan `python master.py --evaluasi` jika ingin menjalankan satu skenario secara terpisah.
 
 ### Bagaimana mengulang pengujian 10 kali?
 
-Jalankan `python master.py --10`. Program meminta konfigurasi sekali lalu mengulang sequential, local parallel, dan distributed dinamis 10 kali. Untuk 10 pengulangan satu skenario khusus, gunakan `python master.py --evaluasi`, pilih mode `4` untuk distributed atau mode `5` untuk perbandingan static-vs-dynamic, lalu ulangi invocation dengan konfigurasi yang sama. Setiap invocation disimpan ke file baru pada `hasil/`.
+Jalankan `python master.py --10`. Program meminta konfigurasi sekali lalu mengulang seluruh suite pengujian 10 kali. Jika hanya ingin mengulang satu skenario tertentu, gunakan `python master.py --evaluasi`, pilih mode yang sesuai, lalu ulangi invocation dengan konfigurasi yang sama. Setiap invocation disimpan ke file baru pada `hasil/`.
 
 ### Apakah master meminta alamat target?
 
@@ -60,7 +60,7 @@ Master membuat direktori `hasil/` di folder proyek dan menyimpan `hasil_monitori
 
 ### Mengapa target yang sama diuji beberapa kali?
 
-Mode normal menjalankan sequential baseline, local parallel, dan distributed dinamis untuk dibandingkan. Mode `--evaluasi` juga menyediakan pembagian statis/dinamis, fault tolerance, dan scalability.
+Mode normal menjalankan seluruh suite: sequential baseline, local parallel, distributed statis, perbandingan statis/dinamis, fault tolerance, dan scalability. `--10` mengulang seluruh suite 10 kali. `--evaluasi` tetap menyediakan pilihan untuk menjalankan satu skenario secara terpisah.
 
 ### Mengapa sebagian variasi scalability dilewati?
 

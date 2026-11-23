@@ -292,7 +292,47 @@ def print_node_metrics(label, metrics):
     append_result_text(message)
 
 
-def print_results(rows, duration, errors=0, baseline=None, node_count=1, node_metrics=None, label="Hasil"):
+def combine_probe_rows(rows):
+    """Combine independent one-probe jobs back into one summary row per IP."""
+    grouped = {}
+    for row in rows:
+        entry = grouped.setdefault(row["ip"], {
+            "sent": 0, "received": 0, "lost": 0, "latency_sum": 0.0,
+            "min_ms": None, "max_ms": None, "errors": [],
+        })
+        if row.get("error"):
+            entry["errors"].append(row["error"])
+            continue
+        entry["sent"] += row.get("sent", 0)
+        entry["received"] += row.get("received", 0)
+        entry["lost"] += row.get("lost", 0)
+        if row.get("avg_ms") is not None:
+            entry["latency_sum"] += row["avg_ms"] * row.get("received", 0)
+            entry["min_ms"] = row["min_ms"] if entry["min_ms"] is None else min(entry["min_ms"], row["min_ms"])
+            entry["max_ms"] = row["max_ms"] if entry["max_ms"] is None else max(entry["max_ms"], row["max_ms"])
+
+    combined = []
+    for ip, entry in grouped.items():
+        sent, received = entry["sent"], entry["received"]
+        if sent == 0 and entry["errors"]:
+            combined.append({"ip": ip, "error": "; ".join(entry["errors"]), "status": "ERROR"})
+            continue
+        combined.append({
+            "ip": ip,
+            "status": "UP" if received else "DOWN",
+            "sent": sent,
+            "received": received,
+            "lost": entry["lost"],
+            "packet_loss_pct": entry["lost"] * 100 / sent if sent else 0.0,
+            "avg_ms": entry["latency_sum"] / received if received else None,
+            "min_ms": entry["min_ms"],
+            "max_ms": entry["max_ms"],
+        })
+    return combined
+
+
+def print_results(rows, duration, errors=0, baseline=None, node_count=1, node_metrics=None,
+                  label="Hasil", throughput_items=None):
     rows.sort(key=lambda row: ipaddress.IPv4Address(row["ip"]))
     print("\nIP              STATUS       LATENCY avg/min/max         PACKET LOSS")
     print("-" * 78)
@@ -306,7 +346,10 @@ def print_results(rows, duration, errors=0, baseline=None, node_count=1, node_me
     up = sum(row.get("status") == "UP" for row in rows)
     down = sum(row.get("status") == "DOWN" for row in rows)
     print(f"\nSelesai {duration:.2f}s — UP: {up}, DOWN: {down}, error: {errors+failed}")
-    print(f"Throughput: {len(rows) / duration:.2f} IP/detik" if duration else "Throughput: -")
+    throughput_count = throughput_items if throughput_items is not None else len(rows)
+    throughput_unit = "probe-task/detik" if throughput_items is not None else "IP/detik"
+    throughput = throughput_count / duration if duration else 0.0
+    print(f"Throughput: {throughput:.2f} {throughput_unit}" if duration else "Throughput: -")
     if node_metrics:
         print_node_metrics("master", node_metrics)
     measured = [row for row in rows if not row.get("error")]
@@ -329,7 +372,7 @@ def print_results(rows, duration, errors=0, baseline=None, node_count=1, node_me
         else:
             print("Analisis performa: waktu sama dengan baseline.")
 
-    summary = [f"Throughput: {len(rows) / duration:.3f} IP/s" if duration else "Throughput: -",
+    summary = [f"Throughput: {throughput:.3f} {throughput_unit}" if duration else "Throughput: -",
                f"UP: {up}; DOWN: {down}; error: {errors + failed}"]
     if measured:
         summary.append(f"Packet loss agregat: {mean_loss:.2f}%")
@@ -685,10 +728,13 @@ def main(repetitions=1):
         timeout = 1.0
 
     save_run_setup(targets, count, timeout, workers, selected)
-    save_run_setup(targets, count, timeout, workers, selected)
     append_result_text(f"Jumlah pengulangan benchmark: {repetitions}")
     print(f"\n[+] {len(targets)} target, {len(selected)} node pemroses.")
-    print(f"[+] Benchmark: {repetitions} pengulangan sequential, local parallel, dan distributed dinamis.")
+    print(f"[+] Suite pengujian lengkap: {repetitions} pengulangan.")
+    remote_nodes = [node for node in selected if not node.get("local")]
+    master_node = next((node for node in selected if node.get("local")),
+                       {"host": socket.gethostname(), "ip": "127.0.0.1",
+                        "cores": os.cpu_count() or 1, "local": True})
     for repetition in range(1, repetitions + 1):
         repetition_label = f"Ulangan {repetition:02d}/{repetitions}"
         print(f"\n{'=' * 18} {repetition_label} {'=' * 18}")
@@ -708,10 +754,54 @@ def main(repetitions=1):
         print_results(local_result["results"], local_duration, baseline=baseline, node_count=1,
                       node_metrics=local_result.get("metrics"), label=f"{repetition_label} — Local parallel")
 
-        print("\n[+] Menjalankan pemantauan distributed dengan pembagian dinamis...")
-        rows, duration, failed = monitor_distributed(targets, selected, count, timeout, dynamic=True)
-        print_results(rows, duration, failed, baseline=baseline, node_count=len(selected),
-                      label=f"{repetition_label} — Distributed dynamic")
+        print("\n[+] Pengujian distributed dengan pembagian statis...")
+        static_rows, static_duration, static_failed = monitor_distributed(
+            targets, selected, count, timeout, dynamic=False)
+        print_results(static_rows, static_duration, static_failed, baseline=baseline,
+                      node_count=len(selected), label=f"{repetition_label} — Distributed static")
+
+        print("\n[+] Perbandingan load balancing dinamis...")
+        balancing_repeats = max(count, (len(selected) * 4 + len(targets) - 1) // len(targets))
+        probe_jobs = targets * balancing_repeats
+        append_result_text(f"Load balancing workload: {balancing_repeats} independent probe jobs/IP")
+        balancing_rows, balancing_static_duration, balancing_static_failed = monitor_distributed(
+            probe_jobs, selected, 1, timeout, dynamic=False)
+        print_results(combine_probe_rows(balancing_rows), balancing_static_duration,
+                      balancing_static_failed, baseline=baseline, node_count=len(selected),
+                      label=f"{repetition_label} — Load balancing static",
+                      throughput_items=len(probe_jobs))
+        balancing_rows, balancing_dynamic_duration, balancing_dynamic_failed = monitor_distributed(
+            probe_jobs, selected, 1, timeout, dynamic=True)
+        print_results(combine_probe_rows(balancing_rows), balancing_dynamic_duration,
+                      balancing_dynamic_failed, baseline=balancing_static_duration,
+                      node_count=len(selected), label=f"{repetition_label} — Load balancing dynamic",
+                      throughput_items=len(probe_jobs))
+
+        if remote_nodes:
+            print("\n[+] Simulasi fault tolerance dan retry...")
+            fault_rows, fault_duration, fault_count = monitor_distributed(
+                targets, selected, count, timeout, simulate_failure=True)
+            print_results(fault_rows, fault_duration, fault_count, baseline=baseline,
+                          node_count=len(selected), label=f"{repetition_label} — Fault tolerance")
+        else:
+            skip = "Fault tolerance dilewati: tidak ada worker jaringan terpilih."
+            print(f"[!] {skip}")
+            append_result_text(f"[!] {repetition_label}: {skip}")
+
+        for remote_count in (1, 2, 4, 6, 9):
+            if len(remote_nodes) < remote_count:
+                skip = (f"Scalability {remote_count} worker dilewati: "
+                        f"hanya {len(remote_nodes)} worker jaringan terpilih.")
+                print(f"[!] {skip}")
+                append_result_text(f"[!] {repetition_label}: {skip}")
+                continue
+            scale_workers = [master_node] + remote_nodes[:remote_count]
+            print(f"\n[+] Scalability: {remote_count} worker + master")
+            scale_rows, scale_duration, scale_failed = monitor_distributed(
+                targets, scale_workers, count, timeout)
+            print_results(scale_rows, scale_duration, scale_failed, baseline=baseline,
+                          node_count=len(scale_workers),
+                          label=f"{repetition_label} — Scalability {remote_count} worker")
 
 
 def monitor_local(targets, count, timeout):
