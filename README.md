@@ -133,7 +133,7 @@ Gunakan profil `Private` untuk jaringan lab/rumah yang dipercaya. Jika jaringan 
 
 ## Alur normal dan evaluasi
 
-Alur normal tidak menampilkan menu skenario: program menjalankan sequential baseline, local parallel pada master, lalu distributed monitoring dengan pembagian dinamis. Untuk pengujian lengkap sesuai PDF (perbandingan statis/dinamis, simulasi fault tolerance, dan scalability 1/2/4/6/9 worker), jalankan `python master.py --evaluasi`. Pada scalability, master lokal ikut sebagai node pemroses; skenario worker yang belum tersedia dilewati. Untuk memenuhi pengujian fisik sesuai PDF diperlukan 1 master dan 9 worker.
+Alur normal tidak menampilkan menu skenario. Setelah node, probe, dan timeout dipilih sekali, `python master.py` otomatis mengulang sequential baseline, local parallel, dan distributed dinamis sebanyak 10 kali. Untuk satu skenario khusus atau pengujian evaluasi lain (static/dynamic, fault tolerance, scalability 1/2/4/6/9 worker), jalankan `python master.py --evaluasi`. Pada scalability, master lokal ikut sebagai node pemroses; setiap skenario yang jumlah worker-nya tidak tersedia dilewati. Untuk memenuhi pengujian fisik sesuai PDF diperlukan 1 master dan 9 worker.
 
 `LAPORAN_TEMPLATE.md` menyediakan kerangka BAB I–V dan tabel pengukuran. Isi dengan data eksperimen aktual; template tidak menggantikan analisis hasil.
 

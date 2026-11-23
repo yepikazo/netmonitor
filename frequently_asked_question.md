@@ -8,7 +8,11 @@ Jalankan `worker.py` pada setiap worker dan biarkan prosesnya aktif. Jalankan `m
 
 ### Bagaimana menjalankan semua skenario pengujian?
 
-Jalankan `python master.py --evaluasi` pada master, lalu pilih skenario dari menu. Perintah biasa `python master.py` menjalankan baseline sequential, local parallel pada master, dan distributed dengan load balancing dinamis.
+Jalankan `python master.py --evaluasi` pada master, lalu pilih skenario dari menu. Perintah biasa `python master.py` menjalankan baseline sequential, local parallel pada master, dan distributed dengan load balancing dinamis; masing-masing diulang 10 kali setelah konfigurasi dimasukkan sekali.
+
+### Bagaimana mengulang pengujian 10 kali?
+
+Untuk 10 pengulangan benchmark normal, cukup jalankan `python master.py`; program mengulang sequential, local parallel, dan distributed dinamis 10 kali dengan konfigurasi yang sama. Untuk mengulang satu skenario khusus, jalankan `python master.py --evaluasi` dan pilih mode `4` untuk distributed atau mode `5` untuk perbandingan static-vs-dynamic. Setiap invocation hasil disimpan ke file baru pada `hasil/`.
 
 ### Apakah master meminta alamat target?
 

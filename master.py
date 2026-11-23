@@ -17,6 +17,7 @@ TCP_PORT = 9998
 MAX_TARGETS = 4096
 WORKER_SERVICE = "tema13-network-monitor-worker-v1"
 RESULTS_FILE = None
+DEFAULT_REPETITIONS = 10
 
 
 def initialize_results_file():
@@ -561,7 +562,6 @@ def evaluation_main():
     print("[+] Worker ditemukan:")
     for worker in remote_workers:
         print(f"    - {worker['host']} ({worker['ip']}) — {worker['cores']} core")
-    print(f"[+] Target monitoring: {len(targets)} alamat IPv4 eksplisit")
 
     all_workers = [{"host": socket.gethostname(), "ip": "127.0.0.1", "cores": os.cpu_count() or 1, "local": True}]
     all_workers.extend(remote_workers)
@@ -685,25 +685,32 @@ def main():
         timeout = 1.0
 
     save_run_setup(targets, count, timeout, workers, selected)
+    save_run_setup(targets, count, timeout, workers, selected)
     print(f"\n[+] {len(targets)} target, {len(selected)} node pemroses.")
-    print("[+] Menjalankan baseline sequential...")
-    started = time.monotonic()
-    baseline_rows = monitor_sequential(targets, count, timeout)
-    baseline = time.monotonic() - started
-    save_result_section("Sequential baseline", baseline_rows, baseline)
-    print(f"[hasil] Sequential: {baseline:.2f}s")
+    print(f"[+] Benchmark otomatis: {DEFAULT_REPETITIONS} pengulangan sequential, local parallel, dan distributed dinamis.")
+    for repetition in range(1, DEFAULT_REPETITIONS + 1):
+        repetition_label = f"Ulangan {repetition:02d}/{DEFAULT_REPETITIONS}"
+        print(f"\n{'=' * 18} {repetition_label} {'=' * 18}")
+        append_result_text(f"\n{'=' * 18} {repetition_label} {'=' * 18}")
 
-    print("\n[+] Menjalankan local parallel pada master...")
-    started = time.monotonic()
-    local_result = monitor_local(targets, count, timeout)
-    local_duration = time.monotonic() - started
-    print_results(local_result["results"], local_duration, baseline=baseline, node_count=1,
-                  node_metrics=local_result.get("metrics"), label="Local parallel")
+        print("[+] Menjalankan baseline sequential...")
+        started = time.monotonic()
+        baseline_rows = monitor_sequential(targets, count, timeout)
+        baseline = time.monotonic() - started
+        save_result_section(f"{repetition_label} — Sequential baseline", baseline_rows, baseline)
+        print(f"[hasil] Sequential: {baseline:.2f}s")
 
-    print("\n[+] Menjalankan pemantauan distributed dengan pembagian dinamis...")
-    rows, duration, failed = monitor_distributed(targets, selected, count, timeout, dynamic=True)
-    print_results(rows, duration, failed, baseline=baseline, node_count=len(selected),
-                  label="Distributed dynamic")
+        print("\n[+] Menjalankan local parallel pada master...")
+        started = time.monotonic()
+        local_result = monitor_local(targets, count, timeout)
+        local_duration = time.monotonic() - started
+        print_results(local_result["results"], local_duration, baseline=baseline, node_count=1,
+                      node_metrics=local_result.get("metrics"), label=f"{repetition_label} — Local parallel")
+
+        print("\n[+] Menjalankan pemantauan distributed dengan pembagian dinamis...")
+        rows, duration, failed = monitor_distributed(targets, selected, count, timeout, dynamic=True)
+        print_results(rows, duration, failed, baseline=baseline, node_count=len(selected),
+                      label=f"{repetition_label} — Distributed dynamic")
 
 
 def monitor_local(targets, count, timeout):
