@@ -1,4 +1,4 @@
 *.pdf
-__pycache__
-__pycache__/worker.cpy
+/__pycache__/
 /hasil/
+venv
