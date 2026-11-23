@@ -17,7 +17,7 @@ TCP_PORT = 9998
 MAX_TARGETS = 4096
 WORKER_SERVICE = "tema13-network-monitor-worker-v1"
 RESULTS_FILE = None
-DEFAULT_REPETITIONS = 10
+REPEAT_FLAG_RUNS = 10
 
 
 def initialize_results_file():
@@ -648,7 +648,7 @@ def evaluation_main():
                       label="Distributed processing")
 
 
-def main():
+def main(repetitions=1):
     print("=" * 68)
     print("DISTRIBUTED NETWORK MONITORING — TEMA 13")
     print("=" * 68)
@@ -686,10 +686,11 @@ def main():
 
     save_run_setup(targets, count, timeout, workers, selected)
     save_run_setup(targets, count, timeout, workers, selected)
+    append_result_text(f"Jumlah pengulangan benchmark: {repetitions}")
     print(f"\n[+] {len(targets)} target, {len(selected)} node pemroses.")
-    print(f"[+] Benchmark otomatis: {DEFAULT_REPETITIONS} pengulangan sequential, local parallel, dan distributed dinamis.")
-    for repetition in range(1, DEFAULT_REPETITIONS + 1):
-        repetition_label = f"Ulangan {repetition:02d}/{DEFAULT_REPETITIONS}"
+    print(f"[+] Benchmark: {repetitions} pengulangan sequential, local parallel, dan distributed dinamis.")
+    for repetition in range(1, repetitions + 1):
+        repetition_label = f"Ulangan {repetition:02d}/{repetitions}"
         print(f"\n{'=' * 18} {repetition_label} {'=' * 18}")
         append_result_text(f"\n{'=' * 18} {repetition_label} {'=' * 18}")
 
@@ -721,11 +722,17 @@ def monitor_local(targets, count, timeout):
 
 if __name__ == "__main__":
     import sys
+    arguments = sys.argv[1:]
+    if arguments not in ([], ["--10"], ["--evaluasi"]):
+        print("Pemakaian: python master.py [--10 | --evaluasi]")
+        raise SystemExit(2)
     results_path = initialize_results_file()
     try:
-        if len(sys.argv) == 2 and sys.argv[1] == "--evaluasi":
+        if arguments == ["--evaluasi"]:
             evaluation_main()
+        elif arguments == ["--10"]:
+            main(repetitions=REPEAT_FLAG_RUNS)
         else:
-            main()
+            main(repetitions=1)
     finally:
         print(f"[hasil] Catatan hasil tersimpan di: {results_path}")

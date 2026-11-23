@@ -8,7 +8,7 @@ Panduan terpisah tersedia: [setup Windows/Linux](PANDUAN_SETUP.md), [alur penget
 
 1. Hubungkan master dan semua worker ke **Wi-Fi/hotspot yang sama** dan pasang Python 3 serta `psutil` pada semua node. Contoh setup Arch/Termux ada di bawah. Pada setiap worker, izinkan TCP `9998` serta UDP `9999` (perintah firewall di bawah).
 2. Jalankan `python worker.py` di setiap worker. Worker harus memakai versi terbaru agar master dapat memverifikasi protokolnya.
-3. Jalankan `python master.py` di master. Program langsung mencari worker, lalu meminta pilihan node pemroses, jumlah probe, dan timeout. Semua worker yang ditemukan otomatis dipantau.
+3. Jalankan `python master.py` di master untuk satu benchmark, atau `python master.py --10` untuk mengulang benchmark 10 kali. Program mencari worker, lalu meminta pilihan node pemroses, jumlah probe, dan timeout satu kali. Semua worker yang ditemukan otomatis dipantau.
 4. Tekan Enter untuk memakai semua node atau masukkan indeks/rentang seperti `0-3`. Jika discovery gagal, masukkan `add <IP>`; IP hanya akan diterima jika merespons protokol worker Tema 13 yang valid.
 
 Jika discovery gagal, masukkan IP worker dengan `add <IP>` pada prompt node. Master hanya menerima IP yang merespons protokol worker Tema 13.
@@ -133,7 +133,7 @@ Gunakan profil `Private` untuk jaringan lab/rumah yang dipercaya. Jika jaringan 
 
 ## Alur normal dan evaluasi
 
-Alur normal tidak menampilkan menu skenario. Setelah node, probe, dan timeout dipilih sekali, `python master.py` otomatis mengulang sequential baseline, local parallel, dan distributed dinamis sebanyak 10 kali. Untuk satu skenario khusus atau pengujian evaluasi lain (static/dynamic, fault tolerance, scalability 1/2/4/6/9 worker), jalankan `python master.py --evaluasi`. Pada scalability, master lokal ikut sebagai node pemroses; setiap skenario yang jumlah worker-nya tidak tersedia dilewati. Untuk memenuhi pengujian fisik sesuai PDF diperlukan 1 master dan 9 worker.
+Alur normal tidak menampilkan menu skenario. `python master.py` menjalankan sequential baseline, local parallel, dan distributed dinamis satu kali; `python master.py --10` menjalankan ketiganya 10 kali dengan konfigurasi yang sama. Untuk satu skenario khusus atau pengujian evaluasi lain (static/dynamic, fault tolerance, scalability 1/2/4/6/9 worker), jalankan `python master.py --evaluasi`. Pada scalability, master lokal ikut sebagai node pemroses; setiap skenario yang jumlah worker-nya tidak tersedia dilewati. Untuk memenuhi pengujian fisik sesuai PDF diperlukan 1 master dan 9 worker.
 
 `LAPORAN_TEMPLATE.md` menyediakan kerangka BAB I–V dan tabel pengukuran. Isi dengan data eksperimen aktual; template tidak menggantikan analisis hasil.
 

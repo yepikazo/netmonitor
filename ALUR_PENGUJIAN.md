@@ -51,7 +51,7 @@ Sebelum mengukur, pastikan jumlah worker yang ditampilkan sesuai node yang aktif
 
 ## B. Pengujian wajib
 
-Perintah biasa `python master.py` menjalankan sequential baseline, local parallel, dan distributed dinamis masing-masing **10 kali** setelah konfigurasi dimasukkan sekali. Untuk skenario khusus di `--evaluasi`, satu pemanggilan hanya menjalankan pilihan tersebut satu kali; ulangi command dan pilih mode/konfigurasi yang sama sebanyak 10 kali. Setiap invocation menyimpan hasilnya ke file baru di direktori `hasil/`. Gunakan jumlah probe, timeout, target, dan kondisi jaringan yang sama agar perbandingan adil.
+`python master.py` menjalankan sequential baseline, local parallel, dan distributed dinamis masing-masing satu kali. Untuk mengulang ketiga pengujian itu 10 kali tanpa memilih mode, jalankan `python master.py --10`; konfigurasi dimasukkan sekali lalu digunakan pada semua pengulangan. Untuk skenario khusus di `--evaluasi`, satu pemanggilan menjalankan pilihan tersebut satu kali; ulangi command dan pilih mode/konfigurasi sama sebanyak 10 kali jika ingin 10 sampel. Setiap invocation menyimpan hasilnya ke file baru di `hasil/`. Gunakan jumlah probe, timeout, target, dan kondisi jaringan yang sama agar perbandingan adil.
 
 Untuk mengukur distributed processing sebanyak 10 kali, pilih mode `4` pada setiap pengulangan. Untuk mengukur dan membandingkan static vs dynamic sebanyak 10 kali, pilih mode `5`; satu pemanggilan mode tersebut menjalankan kedua strategi masing-masing satu kali. Jangan mencampur hasil dari mode atau konfigurasi yang berbeda saat menghitung rata-rata.
 
